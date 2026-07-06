@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CBIL 엔진 점검 — 브라우저에서 Gemini 직접 호출 테스트</title>
+<style>
+  :root{
+    --bg:#f4f3ec; --paper:#ffffff; --ink:#2a2a24; --ink-soft:#62604f;
+    --line:#e2e0d4; --line-strong:#cfccba;
+    --accent:#3f7d5c; --accent-soft:#e6f0ea; --accent-ink:#2c5b41;
+    --ok:#2f7d4f; --warn:#9a6a18; --danger:#b23a2b;
+    --radius:12px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--ink); padding:28px 18px 64px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+    line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:740px; margin:0 auto}
+  .badge{
+    display:inline-block; font-size:12px; font-weight:600; letter-spacing:.02em;
+    color:var(--accent-ink); background:var(--accent-soft);
+    border:1px solid var(--line-strong); border-radius:999px; padding:4px 11px; margin-bottom:14px;
+  }
+  h1{font-size:21px; margin:0 0 6px; letter-spacing:-.01em}
+  .sub{color:var(--ink-soft); font-size:14px; margin:0 0 24px}
+  .card{
+    background:var(--paper); border:1px solid var(--line); border-radius:var(--radius);
+    padding:18px 18px 20px; margin-bottom:16px;
+  }
+  .card h2{font-size:14px; margin:0 0 4px; letter-spacing:.01em}
+  .hint{color:var(--ink-soft); font-size:12.5px; margin:0 0 14px}
+  label{display:block; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin:0 0 5px}
+  input,select{
+    width:100%; font:inherit; font-size:14px; color:var(--ink);
+    background:#fcfcf8; border:1px solid var(--line-strong); border-radius:9px; padding:9px 11px;
+  }
+  input:focus,select:focus{outline:2px solid var(--accent-soft); border-color:var(--accent)}
+  .row{display:flex; gap:12px; flex-wrap:wrap}
+  .row > div{flex:1 1 200px}
+  .keyline{display:flex; gap:8px; align-items:flex-end}
+  .keyline > div{flex:1}
+  button{
+    font:inherit; font-size:13.5px; font-weight:600; cursor:pointer;
+    border-radius:9px; padding:10px 15px; border:1px solid transparent; transition:.12s;
+  }
+  .btn-primary{background:var(--accent); color:#fff}
+  .btn-primary:hover{filter:brightness(.95)}
+  .btn-ghost{background:#fff; color:var(--ink); border-color:var(--line-strong)}
+  .btn-ghost:hover{background:#faf9f3}
+  button:disabled{opacity:.5; cursor:default}
+  .tests{display:flex; gap:10px; flex-wrap:wrap; margin-top:2px}
+  .out{
+    margin-top:14px; border:1px solid var(--line); border-radius:9px;
+    background:#fbfbf6; padding:0; overflow:hidden; display:none;
+  }
+  .out.show{display:block}
+  .out .head{
+    font-size:12px; font-weight:600; padding:8px 12px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:8px;
+  }
+  .dot{width:8px; height:8px; border-radius:50%; flex:none; background:var(--ink-soft)}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.bad{background:var(--danger)}
+  .out .body{padding:12px 14px; font-size:13.5px; white-space:pre-wrap; word-break:break-word}
+  .lens{border-top:1px solid var(--line); padding:11px 14px}
+  .lens:first-child{border-top:none}
+  .lens .name{font-weight:700; color:var(--accent-ink)}
+  .lens .reason{color:var(--ink-soft); font-size:13px; margin-top:2px}
+  .meta{font-size:11.5px; color:var(--ink-soft); margin-top:8px}
+  code{background:#eceadf; padding:1px 5px; border-radius:5px; font-size:12.5px}
+  .footnote{font-size:12px; color:var(--ink-soft); margin-top:22px; text-align:center}
+  a{color:var(--accent-ink)}
+  .spin{display:inline-block; width:13px; height:13px; border:2px solid var(--line-strong);
+    border-top-color:var(--accent); border-radius:50%; animation:r .7s linear infinite; vertical-align:-2px}
+  @keyframes r{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.spin{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="badge">🔧 임시 점검용 · 영쌤 앱 본체가 아닙니다</span>
+  <h1>브라우저에서 Gemini 직접 호출이 되는지 확인</h1>
+  <p class="sub">서버(앱스크립트) 없이, 이 페이지의 자바스크립트가 Gemini API를 곧장 부릅니다.
+    여기서 응답이 돌아오면, 앱 전체를 GitHub Pages로 옮길 수 있다는 뜻입니다.</p>
+
+  <div class="card">
+    <h2>1. 내 Gemini API 키</h2>
+    <p class="hint">키는 이 브라우저에만 저장되고 어디로도 전송되지 않습니다(저장 위치: localStorage).
+      키가 없으면 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>에서 무료로 발급합니다.</p>
+    <div class="row">
+      <div class="keyline">
+        <div>
+          <label for="key">API 키 (AIza… 로 시작)</label>
+          <input id="key" type="password" placeholder="AIza..." autocomplete="off" spellcheck="false">
+        </div>
+        <button class="btn-ghost" id="toggleKey" type="button">보기</button>
+      </div>
+      <div>
+        <label for="model">모델</label>
+        <select id="model">
+          <option value="gemini-2.5-flash" selected>gemini-2.5-flash (권장 · 무료)</option>
+          <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (가장 넉넉한 무료 한도)</option>
+          <option value="gemini-2.5-pro">gemini-2.5-pro (품질 우선 · 무료 한도 작음)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2. 테스트 실행</h2>
+    <p class="hint"><strong>연결 테스트</strong>는 한 줄 응답으로 호출 자체가 되는지 봅니다.
+      <strong>JSON 후보 테스트</strong>는 영쌤 앱의 실제 패턴(엄격한 JSON 출력 → 파싱 → 카드)이 정적 환경에서도 도는지 확인합니다.</p>
+    <div class="tests">
+      <button class="btn-primary" id="btnPing" type="button">① 연결 테스트</button>
+      <button class="btn-ghost" id="btnJson" type="button">② JSON 후보 테스트 (개념적 렌즈 3개)</button>
+    </div>
+
+    <div class="out" id="out">
+      <div class="head"><span class="dot" id="dot"></span><span id="outTitle">결과</span></div>
+      <div id="outBody" class="body"></div>
+    </div>
+  </div>
+
+  <p class="footnote">ⓒ 영쌤클래스 · 이 페이지는 검증이 끝나면 폐기합니다.</p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var KEY_STORE = "cbil_test_gemini_key";
+  var $ = function(id){ return document.getElementById(id); };
+
+  // 키 복원/저장
+  var keyInput = $("key");
+  try { keyInput.value = localStorage.getItem(KEY_STORE) || ""; } catch(e){}
+  keyInput.addEventListener("input", function(){
+    try { localStorage.setItem(KEY_STORE, keyInput.value.trim()); } catch(e){}
+  });
+  $("toggleKey").addEventListener("click", function(){
+    if (keyInput.type === "password"){ keyInput.type = "text"; this.textContent = "숨기기"; }
+    else { keyInput.type = "password"; this.textContent = "보기"; }
+  });
+
+  // 공통 Gemini 호출
+  async function callGemini(opts){
+    var key = keyInput.value.trim();
+    if (!key) { var e = new Error("NO_KEY"); e.code = "NO_KEY"; throw e; }
+    var model = $("model").value;
+    var url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent";
+    var body = { contents: [{ parts: [{ text: opts.prompt }] }] };
+    if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
+    if (opts.jsonMode) body.generationConfig = { responseMimeType: "application/json", temperature: 0.9 };
+
+    var res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify(body)
+      });
+    } catch (netErr) {
+      var n = new Error("네트워크 또는 CORS 차단으로 요청이 막혔습니다. (브라우저 콘솔의 메시지를 확인하세요)");
+      n.code = "NETWORK"; throw n;
+    }
+
+    if (!res.ok){
+      var detail = "";
+      try { var ej = await res.json(); detail = (ej.error && ej.error.message) || ""; } catch(_){}
+      var err = new Error(detail || ("HTTP " + res.status));
+      err.status = res.status; err.code = "HTTP"; throw err;
+    }
+    var data = await res.json();
+    var parts = (((data.candidates||[])[0]||{}).content||{}).parts || [];
+    var text = parts.map(function(p){ return p.text || ""; }).join("");
+    return text;
+  }
+
+  function setOut(state, title, html){
+    var out = $("out"), dot = $("dot");
+    out.classList.add("show");
+    dot.className = "dot" + (state ? " " + state : "");
+    $("outTitle").innerHTML = title;
+    $("outBody").innerHTML = html;
+  }
+  function loadingOut(title){ setOut("", '<span class="spin"></span> ' + title, ""); }
+
+  function describeError(err){
+    if (err.code === "NO_KEY") return ["warn", "API 키를 먼저 입력하세요."];
+    if (err.code === "NETWORK") return ["bad", err.message +
+      "\n\n참고: Gemini API는 본래 브라우저 호출을 허용하므로, https로 배포된 GitHub Pages에서는 보통 이 오류가 나지 않습니다. 키 형식이나 네트워크를 먼저 확인하세요."];
+    if (err.status === 400) return ["bad", "잘못된 요청(400)입니다. API 키 형식이나 모델명을 확인하세요.\n\n" + (err.message||"")];
+    if (err.status === 403) return ["bad", "권한 거부(403)입니다. 키가 유효한지, 해당 키로 Gemini API가 사용 설정됐는지 확인하세요.\n\n" + (err.message||"")];
+    if (err.status === 429) return ["warn", "무료 한도 초과(429)입니다. 분당 또는 일일 한도에 걸렸습니다. 잠시 후 다시 시도하세요.\n\n" + (err.message||"")];
+    if (err.status === 503) return ["warn", "일시적 과부하(503)입니다. 잠시 후 다시 시도하세요."];
+    return ["bad", (err.message || "알 수 없는 오류") + (err.status ? " (HTTP " + err.status + ")" : "")];
+  }
+
+  function busy(b){ $("btnPing").disabled = b; $("btnJson").disabled = b; }
+
+  // ① 연결 테스트
+  $("btnPing").addEventListener("click", async function(){
+    busy(true); loadingOut("호출 중…");
+    var t0 = performance.now();
+    try {
+      var text = await callGemini({
+        prompt: "한국어로, '연결이 정상입니다.'라는 뜻을 담아 짧고 친근한 한 문장만 답해 주세요."
+      });
+      var ms = Math.round(performance.now() - t0);
+      setOut("ok", "✓ 호출 성공",
+        text.trim() +
+        '<div class="meta">응답 시간 ' + ms + 'ms · 모델 <code>' + $("model").value + '</code>' +
+        '<br>정적 페이지에서 Gemini 직접 호출이 확인됐습니다.</div>');
+    } catch (err){
+      var d = describeError(err); setOut(d[0], "호출 실패", d[1]);
+    } finally { busy(false); }
+  });
+
+  // ② JSON 후보 테스트 (영쌤 앱의 실제 패턴)
+  $("btnJson").addEventListener("click", async function(){
+    busy(true); loadingOut("후보 생성 중…");
+    var t0 = performance.now();
+    var system = "너는 2022 개정 교육과정과 개념기반탐구학습(CBIL) 단원 설계를 돕는 도우미다. " +
+                 "반드시 JSON 배열만 출력한다. 설명, 머리말, 마크다운 코드펜스를 절대 쓰지 않는다.";
+    var prompt = "초등학교 5학년 사회과 '인권 존중과 정의로운 사회' 단원에 어울리는 " +
+                 "개념적 렌즈(Conceptual Lens) 후보를 정확히 3개 제안하라. " +
+                 "각 원소는 {\"lens\":\"렌즈 이름(한 단어 또는 짧은 구)\",\"reason\":\"왜 이 렌즈가 이 단원에 적합한지 한 문장\"} 형식의 객체다. " +
+                 "JSON 배열로만 답하라.";
+    try {
+      var raw = await callGemini({ prompt: prompt, system: system, jsonMode: true });
+      var cleaned = raw.replace(/```json|```/g, "").trim();
+      var arr;
+      try { arr = JSON.parse(cleaned); }
+      catch (pe){
+        setOut("warn", "응답은 받았으나 JSON 파싱 실패",
+          "원문을 그대로 표시합니다(프롬프트를 다듬으면 해결됩니다):\n\n" + raw);
+        return;
+      }
+      var ms = Math.round(performance.now() - t0);
+      var html = "";
+      (arr || []).forEach(function(item){
+        var name = (item && item.lens) ? item.lens : "(이름 없음)";
+        var reason = (item && item.reason) ? item.reason : "";
+        html += '<div class="lens"><div class="name">' + escapeHtml(name) + '</div>' +
+                '<div class="reason">' + escapeHtml(reason) + '</div></div>';
+      });
+      html += '<div class="lens"><div class="meta">응답 시간 ' + ms + 'ms · ' +
+              (Array.isArray(arr) ? arr.length : 0) + '개 후보 · JSON 파싱 성공' +
+              '<br>영쌤 앱의 핵심 패턴(엄격한 JSON → 파싱 → 화면)이 정적 환경에서 동작합니다.</div></div>';
+      var out = $("out"); out.classList.add("show");
+      $("dot").className = "dot ok"; $("outTitle").textContent = "✓ JSON 후보 생성 성공";
+      $("outBody").innerHTML = ""; // 카드형 표시를 위해 body 비우고 lens들을 head 아래에 직접
+      $("outBody").innerHTML = html;
+    } catch (err){
+      var d = describeError(err); setOut(d[0], "후보 생성 실패", d[1]);
+    } finally { busy(false); }
+  });
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c];
+    });
+  }
+})();
+</script>
+</body>
+</html>
