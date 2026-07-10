@@ -21,6 +21,8 @@ var GEMINI_MAX_TOKENS  = 8192;
 var GEMINI_API_VERSION = 'v1beta';
 var KEY_STORE = 'cbil_gemini_key_v1';
 var DATA_BASE = 'data/';
+// 모든 프롬프트 끝에 붙는 출력 형식 규칙 — JSON 문자열 안의 큰따옴표(이스케이프 실수의 주범)를 원천 차단
+var JSON_OUTPUT_RULE_ = '\n[형식 규칙] JSON 문자열 값 안에 큰따옴표(")를 절대 쓰지 마. 인용·대사·강조가 필요하면 작은따옴표나 낫표(『 』)를 사용해.';
 
 /* ══════════ 1. 데이터 계층 (SpreadsheetApp 대체) ══════════ */
 var indexCache = null;          // standards-index.json
@@ -236,7 +238,7 @@ function callGeminiModel_(model, prompt, schema){
             '/models/' + model + ':generateContent?key=' + encodeURIComponent(apiKey);
   var generationConfig = { responseMimeType: 'application/json', temperature: GEMINI_TEMPERATURE, maxOutputTokens: GEMINI_MAX_TOKENS };
   if (schema) generationConfig.responseSchema = schema;
-  var payload = { contents: [{ parts: [{ text: prompt }] }], generationConfig: generationConfig };
+  var payload = { contents: [{ parts: [{ text: prompt + JSON_OUTPUT_RULE_ }] }], generationConfig: generationConfig };
 
   return fetchGemini_(url, payload).then(function(r){
     // 순간 몰림(분당 429·일시 혼잡 503)은 5초 쉬고 한 번 자동 재시도
@@ -290,6 +292,8 @@ function safeParseJson_(text){
  */
 function repairJson_(text){
   var t = String(text).trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '').trim();
+  // 0) 가장 흔한 원인부터: 문자열 안의 이스케이프 안 된 따옴표를 수선해 무손실 복구 시도
+  try { return JSON.parse(fixUnescapedQuotes_(t)); } catch (e0) {}
   var tries = 0;
   for (var cut = t.length; cut > 1 && tries < 400; cut--) {
     var ch = t.charAt(cut - 1);
@@ -328,6 +332,35 @@ function closeBrackets_(s){
   var tail = '';
   for (var j = stack.length - 1; j >= 0; j--) tail += (stack[j] === '{' ? '}' : ']');
   return s + tail;
+}
+
+/**
+ * 문자열 값 안의 이스케이프 안 된 큰따옴표를 \"로 수선한다.
+ * 판별: 문자열 안에서 만난 따옴표의 다음 비공백 문자가 구조 문자(, } ] :)면 '닫는 따옴표',
+ *       아니면 '내용 속 따옴표'로 보고 이스케이프한다. (완벽하진 않지만 실패해도 다음 단계로 넘어갈 뿐)
+ */
+function fixUnescapedQuotes_(t){
+  var out = '', inStr = false, esc = false;
+  for (var i = 0; i < t.length; i++) {
+    var c = t.charAt(i);
+    if (!inStr) {
+      if (c === '"') inStr = true;
+      out += c;
+      continue;
+    }
+    if (esc) { esc = false; out += c; continue; }
+    if (c === '\\') { esc = true; out += c; continue; }
+    if (c === '"') {
+      var j = i + 1;
+      while (j < t.length && /\s/.test(t.charAt(j))) j++;
+      var nx = j < t.length ? t.charAt(j) : '';
+      if (nx === ',' || nx === '}' || nx === ']' || nx === ':' || nx === '') { inStr = false; out += c; }
+      else { out += '\\"'; }
+      continue;
+    }
+    out += c;
+  }
+  return out;
 }
 
 /* ══════════ 3. CBIL 단계 로직 — v2.5 CBIL.gs 원문 (무수정) ══════════ */
