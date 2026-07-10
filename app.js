@@ -194,6 +194,16 @@ function isOverloadError_(e){ var m = msgOf_(e); return m.indexOf('OVERLOADED') 
 function isDailyQuotaBody_(body){ return /per\s*day|perday|daily/i.test(String(body || '')); }
 
 function callGemini(prompt, schema){
+  // Gemini가 이따금 형식이 어긋난 JSON을 반환한다(간헐적). 복구 실패 시 같은 요청을 1회만 자동 재시도한다.
+  return callGeminiLadder_(prompt, schema)['catch'](function(e){
+    if (isParseError_(e)) return callGeminiLadder_(prompt, schema);
+    throw e;
+  });
+}
+
+function isParseError_(e){ return msgOf_(e).indexOf('JSON 파싱 실패') === 0; }
+
+function callGeminiLadder_(prompt, schema){
   return callGeminiModel_(GEMINI_MODEL, prompt, schema)['catch'](function(e){
     if (!isQuotaError_(e) && !isOverloadError_(e)) throw e;
     return callGeminiModel_(GEMINI_FALLBACK_MODEL, prompt, schema)['catch'](function(e2){
@@ -246,7 +256,14 @@ function callGeminiModel_(model, prompt, schema){
       else if (data.promptFeedback && data.promptFeedback.blockReason) reason = ' (blockReason: ' + data.promptFeedback.blockReason + ')';
       throw new Error('Gemini 응답에 텍스트가 없습니다' + reason + '. 원문: ' + String(r.body || '').substring(0, 500));
     }
-    return safeParseJson_(text);
+    try { return safeParseJson_(text); }
+    catch (pe) {
+      var repaired = repairJson_(text);
+      if (repaired !== null) return repaired; // 잘린 꼬리를 정리해 완성된 후보까지 살림
+      var fr = (data.candidates && data.candidates[0] && data.candidates[0].finishReason) ? data.candidates[0].finishReason : '';
+      if (fr && fr !== 'STOP') throw new Error(msgOf_(pe) + '\n(응답 중단 사유: ' + fr + ')');
+      throw pe;
+    }
   });
 }
 
@@ -264,6 +281,53 @@ function safeParseJson_(text){
   t = t.replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '').trim();
   try { return JSON.parse(t); }
   catch (e) { throw new Error('JSON 파싱 실패: ' + e + '\n원문(앞 500자): ' + t.substring(0, 500)); }
+}
+
+/**
+ * 끝이 잘리거나 형식이 어긋난 JSON에서, 온전한 부분까지만 살려 파싱을 시도한다.
+ * 뒤에서부터 '값의 끝일 만한 지점'(닫는 괄호·따옴표)으로 잘라 가며 열린 괄호를 닫아 본다.
+ * 성공하면 객체를, 전부 실패하면 null을 반환(호출부가 자동 재시도로 넘어감).
+ */
+function repairJson_(text){
+  var t = String(text).trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/```\s*$/, '').trim();
+  var tries = 0;
+  for (var cut = t.length; cut > 1 && tries < 400; cut--) {
+    var ch = t.charAt(cut - 1);
+    if (ch !== '}' && ch !== ']') continue; // 완결된 객체·배열 경계에서만 자름(반쪽 항목 방지)
+    tries++;
+    var head = t.substring(0, cut).replace(/,\s*$/, '');
+    var closed = closeBrackets_(head);
+    if (closed === null) continue;
+    try {
+      var obj = JSON.parse(closed);
+      // 살려낸 분량이 원문의 60% 미만이면 버림 — 이럴 땐 자동 재시도가 더 낫다
+      if (JSON.stringify(obj).length < t.length * 0.6) return null;
+      return obj;
+    } catch (e) {}
+  }
+  return null;
+}
+
+/** 문자열 상태를 추적하며 열린 { [ 를 세어, 부족한 닫는 괄호를 붙인다. 구조가 어긋나면 null. */
+function closeBrackets_(s){
+  var stack = [], inStr = false, esc = false;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{' || c === '[') stack.push(c);
+    else if (c === '}') { if (stack.pop() !== '{') return null; }
+    else if (c === ']') { if (stack.pop() !== '[') return null; }
+  }
+  if (inStr) return null; // 문자열 한복판에서 끊긴 지점 — 이 절단점은 포기
+  var tail = '';
+  for (var j = stack.length - 1; j >= 0; j--) tail += (stack[j] === '{' ? '}' : ']');
+  return s + tail;
 }
 
 /* ══════════ 3. CBIL 단계 로직 — v2.5 CBIL.gs 원문 (무수정) ══════════ */
