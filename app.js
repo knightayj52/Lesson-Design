@@ -1050,13 +1050,347 @@ function generateReview(ctx) {
   return callGemini(prompt);
 }
 
-/* ══════════ 4. 내보내기 (다음 빌드: docx.js) ══════════ */
-function authPing(){ return Promise.resolve({ ok: true }); }
-function exportDesign(p){
-  return Promise.reject(new Error('v3.0에서는 내보내기가 워드(.docx) 파일 다운로드 방식으로 바뀌며, 다음 업데이트에서 제공됩니다. 설계 내용은 브라우저 보관함에 안전하게 저장되어 있습니다.'));
+/* ══════════ 4. 내보내기 (docx.js 워드 + 인쇄 PDF) ══════════ */
+/* ══════════ 내보내기 v3.0 — docx.js 워드 생성 + 인쇄용 PDF ══════════
+ * Export.gs의 문서 구조·표 스타일·🔬 학습과학 메모를 그대로 재현한다.
+ * 워드: dolanmiu/docx(UMD, CDN) → Packer.toBlob → 다운로드
+ * PDF : 설계안을 인쇄용 HTML로 렌더 → 새 창 인쇄 대화상자(한글 안전)
+ * docx 라이브러리는 index.html에서 CDN으로 로드(window.docx). 미로드 시 안내.
+ */
+var DOCX_TABLE_BORDER = 'C8C0AE', KV_LABEL_BG = 'F3EFE7', TH_BG = 'E9E3D3';
+
+function ensureDocx_(){
+  if (!window.docx) throw new Error('문서 생성 구성요소를 불러오지 못했어요. 인터넷 연결을 확인하고 페이지를 새로고침한 뒤 다시 시도해 주세요.');
+  return window.docx;
 }
-function exportPdf(docId){
-  return Promise.reject(new Error('PDF 내보내기는 다음 업데이트에서 제공됩니다.'));
+
+function nlText_(s){ return s ? ('\n' + s) : ''; }
+function bulletsText_(arr){ return (arr && arr.length) ? '• ' + arr.join('\n• ') : ''; }
+function numberedText_(arr){ var o=[]; for(var i=0;i<(arr?arr.length:0);i++) o.push((i+1)+'. '+arr[i]); return o.join('\n'); }
+function stdLines_(arr){ var o=[]; for(var i=0;i<(arr?arr.length:0);i++) o.push(arr[i].code+' '+arr[i].statement); return o.join('\n'); }
+function flowItemsText_(items){
+  var o=[];
+  for(var i=0;i<(items?items.length:0);i++){
+    var it=items[i];
+    o.push('• '+it.name+(it.note?' — '+it.note:'')+(it.science?'\n   [학습과학] '+it.science:''));
+  }
+  return o.join('\n');
+}
+function strategyItemsText_(items){
+  var o=[];
+  for(var i=0;i<(items?items.length:0);i++){
+    var it=items[i];
+    o.push('• '+it.name+(it.note?' — '+it.note:'')+(it.science?'\n   [학습과학] '+it.science:''));
+  }
+  return o.join('\n');
+}
+
+/** 여러 줄 문자열 → docx Paragraph 배열(줄바꿈 보존) */
+function paras_(text){
+  var d=ensureDocx_();
+  var lines=String(text==null?'':text).split('\n');
+  return lines.map(function(ln){
+    return new d.Paragraph({ children:[new d.TextRun({ text:ln, size:20 })], spacing:{ after:20 } });
+  });
+}
+function cell_(text, opts){
+  var d=ensureDocx_(); opts=opts||{};
+  return new d.TableCell({
+    children: paras_(text),
+    shading: opts.bg ? { type:d.ShadingType.CLEAR, fill:opts.bg, color:'auto' } : undefined,
+    width: opts.width ? { size:opts.width, type:d.WidthType.DXA } : undefined,
+    margins: { top:60, bottom:60, left:100, right:100 }
+  });
+}
+function boldCell_(text, opts){
+  var d=ensureDocx_(); opts=opts||{};
+  return new d.TableCell({
+    children: String(text==null?'':text).split('\n').map(function(ln){
+      return new d.Paragraph({ children:[new d.TextRun({ text:ln, bold:true, size:20 })] });
+    }),
+    shading:{ type:d.ShadingType.CLEAR, fill:opts.bg||KV_LABEL_BG, color:'auto' },
+    width: opts.width ? { size:opts.width, type:d.WidthType.DXA } : undefined,
+    margins: { top:60, bottom:60, left:100, right:100 }
+  });
+}
+function tableBorders_(){
+  var d=ensureDocx_(), b={ style:d.BorderStyle.SINGLE, size:4, color:DOCX_TABLE_BORDER };
+  return { top:b, bottom:b, left:b, right:b, insideHorizontal:b, insideVertical:b };
+}
+/** 2열 key-value 표 */
+function kvTable_(rows){
+  var d=ensureDocx_();
+  var trs=rows.map(function(r){
+    return new d.TableRow({ children:[ boldCell_(r[0],{width:2200}), cell_(r[1]||'',{width:6800}) ] });
+  });
+  return new d.Table({ rows:trs, width:{ size:9000, type:d.WidthType.DXA }, borders:tableBorders_() });
+}
+/** 머리글 있는 표 */
+function headTable_(header, rows){
+  var d=ensureDocx_();
+  var head=new d.TableRow({ tableHeader:true, children:header.map(function(h){ return boldCell_(h,{bg:TH_BG}); }) });
+  var body=(rows||[]).map(function(cells){
+    return new d.TableRow({ children:cells.map(function(c){ return cell_(c); }) });
+  });
+  return new d.Table({ rows:[head].concat(body), width:{ size:9000, type:d.WidthType.DXA }, borders:tableBorders_() });
+}
+function h2_(text){ var d=ensureDocx_(); return new d.Paragraph({ text:text, heading:d.HeadingLevel.HEADING_2, spacing:{ before:280, after:120 } }); }
+function h3_(text){ var d=ensureDocx_(); return new d.Paragraph({ text:text, heading:d.HeadingLevel.HEADING_3, spacing:{ before:180, after:80 } }); }
+function spacer_(){ var d=ensureDocx_(); return new d.Paragraph({ text:'', spacing:{ after:80 } }); }
+
+function pushQ_(rows, label, arr){ if(arr && arr.length) rows.push([label, bulletsText_(arr)]); }
+
+/** 설계 payload → docx 본문 요소 배열 */
+function buildDocxChildren_(p){
+  var d=ensureDocx_(), K=[];
+
+  K.push(new d.Paragraph({ text:p.title||'단원 설계', heading:d.HeadingLevel.TITLE }));
+  K.push(new d.Paragraph({ children:[new d.TextRun({ text:'개념 기반 탐구 단원 설계안 · '+(p.gradeBand||'')+' · '+(p.subject||''), italics:true, size:22, color:'6B6552' })], spacing:{ after:160 } }));
+
+  // 1. 단원 개요
+  K.push(h2_('1. 단원 개요'));
+  K.push(kvTable_([
+    ['단원명', (p.title||'')+nlText_(p.titleNote)],
+    ['교과 / 학년군', (p.subject||'')+' / '+(p.gradeBand||'')],
+    ['성취기준', stdLines_(p.standards)],
+    ['개념적 렌즈', (p.lens||'')+nlText_(p.lensNote)],
+    ['핵심 아이디어', (p.coreIdea||'')+nlText_(p.coreIdeaNote)],
+    ['스트랜드', (p.strands||[]).join(' · ')],
+    ['예상 선개념·오개념', bulletsText_(p.preconceptions)],
+    ['일반화 (개념적 이해)', numberedText_(p.generalizations)]
+  ]));
+
+  // 2. 탐구 질문
+  K.push(h2_('2. 탐구 질문'));
+  var qByGen=(p.questions&&p.questions.byGen)?p.questions.byGen:[];
+  if(qByGen.length){
+    for(var qi=0;qi<qByGen.length;qi++){
+      var bg=qByGen[qi], grows=[];
+      pushQ_(grows,'사실적',bg.factual);
+      pushQ_(grows,'개념 형성',bg.conceptForm);
+      pushQ_(grows,'개념적',bg.conceptual);
+      if(grows.length){
+        K.push(h3_((bg.strand?'['+bg.strand+'] ':'')+(bg.gen||'')));
+        K.push(headTable_(['유형','질문'], grows));
+      }
+    }
+  } else {
+    var qrows=[];
+    pushQ_(qrows,'사실적',p.questions&&p.questions.factual);
+    pushQ_(qrows,'개념적',p.questions&&p.questions.conceptual);
+    if(qrows.length) K.push(headTable_(['유형','질문'], qrows));
+  }
+  var uq=[];
+  pushQ_(uq,'논쟁적',p.questions&&p.questions.debatable);
+  pushQ_(uq,'메타인지',p.questions&&p.questions.metacognitive);
+  if(uq.length){ K.push(h3_('단원 전체 질문 (논쟁적 · 메타인지)')); K.push(headTable_(['유형','질문'], uq)); }
+
+  // 3. 수행 평가
+  if(p.assessFramework==='rafts' && p.rafts){
+    K.push(h2_('3. 최종 수행 평가 (RAFTS)'));
+    K.push(kvTable_([
+      ['과제명',p.rafts.title||''],['R · 역할 (Role)',p.rafts.role||''],['A · 독자 (Audience)',p.rafts.audience||''],
+      ['F · 형식 (Format)',p.rafts.format||''],['T · 주제 (Topic)',p.rafts.topic||''],
+      ['S · 핵심 동사 (Strong Verb)',p.rafts.strongVerb||''],['과제 지시문',p.rafts.task||'']
+    ]));
+    if(p.rafts.rubric&&p.rafts.rubric.length){
+      K.push(h3_('채점 루브릭'));
+      K.push(headTable_(['평가 축','A · 상','B · 중','C · 하'], p.rafts.rubric.map(function(r){ return [r.criterion||'',r.A||'',r.B||'',r.C||'']; })));
+    }
+    if(p.rafts.checkpoints&&p.rafts.checkpoints.length){
+      K.push(h3_('형성평가 체크포인트'));
+      K.push(kvTable_([['체크포인트', bulletsText_(p.rafts.checkpoints.map(function(c){ return c.name+(c.note?' — '+c.note:''); }))]]));
+    }
+  } else {
+    K.push(h2_('3. 최종 수행 평가 (GRASPS)'));
+    if(p.grasps){
+      K.push(kvTable_([
+        ['과제명',p.grasps.title||''],['G · 목표 (Goal)',p.grasps.goal||''],['R · 역할 (Role)',p.grasps.role||''],
+        ['A · 청중 (Audience)',p.grasps.audience||''],['S · 상황 (Situation)',p.grasps.situation||''],
+        ['P · 결과물 (Product)',p.grasps.product||''],['S · 기준 (Standard)',p.grasps.standard||''],
+        ['형성평가 체크포인트', bulletsText_((p.grasps.checkpoints||[]).map(function(c){ return c.name+(c.note?' — '+c.note:''); }))]
+      ]));
+    }
+  }
+
+  // 4. 수업 흐름
+  K.push(h2_('4. 탐구 수업 흐름 (마샬·프렌치 7단계)'));
+  var frows=(p.flowTable||[]).map(function(row){ return [ (row.strand||''), row.phase, flowItemsText_(row.activities) ]; });
+  K.push(headTable_(['스트랜드','단계','활동'], frows));
+  // 사고 전략(공통 + 스트랜드 예외)
+  if(p.strategiesTable && p.strategiesTable.length){
+    K.push(h3_('단계별 사고 전략 (공통 루틴 · 스트랜드 예외)'));
+    var srows=p.strategiesTable.map(function(st){
+      var ov='';
+      if(st.overrides && st.overrides.length){
+        ov=st.overrides.map(function(o){ return '['+o.strand+'] '+strategyItemsText_(o.strategies); }).join('\n');
+      }
+      return [ st.phase, strategyItemsText_(st.strategies), ov ];
+    });
+    K.push(headTable_(['단계','공통 사고 전략','스트랜드 예외'], srows));
+  }
+  if(p.sequence && p.sequence.length){ K.push(kvTable_([['단원 전개 순서', p.sequence.join('  →  ')]])); }
+
+  // 5. 학습과학 점검
+  if(p.checkRows && p.checkRows.length){
+    K.push(h2_('5. 학습과학 자체 점검 결과'));
+    var crows=p.checkRows.map(function(c){ return [ c.status==='warn'?'⚠ 보완':'✓ 통과', c.label, (c.evidence||'')+(c.advice?'\n제안: '+c.advice:'') ]; });
+    K.push(headTable_(['판정','항목','근거 · 제안'], crows));
+  }
+
+  // 6. 학생용 개요
+  if(p.overview){ K.push(h2_('6. 학생에게 들려줄 단원 개요')); K.push.apply(K, paras_(p.overview)); }
+
+  // 참고문헌
+  K.push(h2_('참고문헌'));
+  var refs=[
+    'Marschall, C. & French, R. (2018). Concept-Based Inquiry in Action. 국역: 『개념 기반 탐구학습의 실천』(학지사).',
+    'Erickson, H. L., Lanning, L. A., & French, R. (2017). Concept-Based Curriculum and Instruction for the Thinking Classroom. 국역: 『생각하는 교실을 위한 개념기반 교육과정 및 수업』(학지사).',
+    '『개념 기반 교육과정 수업 설계의 이론과 실제』(박영스토리).',
+    'National Research Council (2000). How People Learn.',
+    'Wiggins, G. & McTighe, J. Understanding by Design (백워드 설계 · GRASPS).'
+  ];
+  refs.forEach(function(t){ K.push(new d.Paragraph({ text:t, bullet:{ level:0 }, spacing:{ after:20 }, children:undefined })); });
+
+  K.push(spacer_());
+  K.push(new d.Paragraph({ children:[new d.TextRun({ text:'ⓒ 영쌤클래스 · 단원 설계 도우미로 생성 · '+dateStr_(), italics:true, size:18, color:'888070' })] }));
+  return K;
+}
+
+function dateStr_(){
+  var d=new Date();
+  return d.getFullYear()+'년 '+(d.getMonth()+1)+'월 '+d.getDate()+'일';
+}
+function safeFileName_(s){ return String(s||'단원설계').replace(/[\\/:*?"<>|]/g,' ').replace(/\s+/g,' ').trim().slice(0,80); }
+
+/** 워드(.docx) 생성 → 다운로드. exportDesign(payload) 반환: {name} */
+function exportDesign(p){
+  if(!p || !p.title) return Promise.reject(new Error('내보낼 설계 데이터가 비어 있습니다. 단원 설계를 끝까지 완성해 주세요.'));
+  var d;
+  try { d=ensureDocx_(); } catch(e){ return Promise.reject(e); }
+  return Promise.resolve().then(function(){
+    var doc=new d.Document({
+      styles:{ default:{
+        document:{ run:{ font:'맑은 고딕', size:20 } },
+        title:{ run:{ font:'맑은 고딕', size:40, bold:true, color:'2A2A24' }, paragraph:{ spacing:{ after:80 } } },
+        heading2:{ run:{ font:'맑은 고딕', size:26, bold:true, color:'B45309' }, paragraph:{ spacing:{ before:280, after:120 } } },
+        heading3:{ run:{ font:'맑은 고딕', size:22, bold:true, color:'2A2A24' }, paragraph:{ spacing:{ before:160, after:60 } } }
+      }},
+      sections:[{ properties:{ page:{ margin:{ top:1000, bottom:1000, left:1000, right:1000 } } }, children:buildDocxChildren_(p) }]
+    });
+    return d.Packer.toBlob(doc);
+  }).then(function(blob){
+    var name=safeFileName_('[단원 설계] '+p.title)+'.docx';
+    triggerDownload_(blob, name);
+    return { name:name };
+  });
+}
+
+function triggerDownload_(blob, name){
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url; a.download=name;
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 1500);
+}
+
+/* ── PDF: 인쇄용 HTML → 새 창 인쇄 대화상자(한글 안전) ── */
+function exportPdf(p){
+  if(!p || !p.title) return Promise.reject(new Error('먼저 단원 설계를 완성해 주세요.'));
+  try {
+    var html=buildPrintHtml_(p);
+    var w=window.open('', '_blank');
+    if(!w) throw new Error('팝업이 차단되었어요. 브라우저 주소창의 팝업 차단을 해제한 뒤 다시 시도해 주세요.');
+    w.document.open(); w.document.write(html); w.document.close();
+    return Promise.resolve({ name:p.title+'.pdf' });
+  } catch(e){ return Promise.reject(e); }
+}
+
+function esc_(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+function nl2br_(s){ return esc_(s).replace(/\n/g,'<br>'); }
+function kvRows_(rows){ return rows.map(function(r){ return '<tr><th>'+esc_(r[0])+'</th><td>'+nl2br_(r[1]||'')+'</td></tr>'; }).join(''); }
+function hdRows_(header, rows){
+  var h='<tr>'+header.map(function(x){ return '<th>'+esc_(x)+'</th>'; }).join('')+'</tr>';
+  var b=(rows||[]).map(function(cells){ return '<tr>'+cells.map(function(c){ return '<td>'+nl2br_(c)+'</td>'; }).join('')+'</tr>'; }).join('');
+  return h+b;
+}
+function buildPrintHtml_(p){
+  var S=[];
+  S.push('<h1>'+esc_(p.title||'단원 설계')+'</h1>');
+  S.push('<p class="sub">개념 기반 탐구 단원 설계안 · '+esc_(p.gradeBand||'')+' · '+esc_(p.subject||'')+'</p>');
+  S.push('<h2>1. 단원 개요</h2><table class="kv">'+kvRows_([
+    ['단원명',(p.title||'')+nlText_(p.titleNote)],['교과 / 학년군',(p.subject||'')+' / '+(p.gradeBand||'')],
+    ['성취기준',stdLines_(p.standards)],['개념적 렌즈',(p.lens||'')+nlText_(p.lensNote)],
+    ['핵심 아이디어',(p.coreIdea||'')+nlText_(p.coreIdeaNote)],['스트랜드',(p.strands||[]).join(' · ')],
+    ['예상 선개념·오개념',bulletsText_(p.preconceptions)],['일반화 (개념적 이해)',numberedText_(p.generalizations)]
+  ])+'</table>');
+  S.push('<h2>2. 탐구 질문</h2>');
+  var qByGen=(p.questions&&p.questions.byGen)?p.questions.byGen:[];
+  if(qByGen.length){
+    for(var qi=0;qi<qByGen.length;qi++){
+      var bg=qByGen[qi], grows=[];
+      pushQ_(grows,'사실적',bg.factual); pushQ_(grows,'개념 형성',bg.conceptForm); pushQ_(grows,'개념적',bg.conceptual);
+      if(grows.length){ S.push('<h3>'+esc_((bg.strand?'['+bg.strand+'] ':'')+(bg.gen||''))+'</h3><table class="hd">'+hdRows_(['유형','질문'],grows)+'</table>'); }
+    }
+  }
+  var uq=[]; pushQ_(uq,'논쟁적',p.questions&&p.questions.debatable); pushQ_(uq,'메타인지',p.questions&&p.questions.metacognitive);
+  if(uq.length) S.push('<h3>단원 전체 질문 (논쟁적 · 메타인지)</h3><table class="hd">'+hdRows_(['유형','질문'],uq)+'</table>');
+  if(p.assessFramework==='rafts'&&p.rafts){
+    S.push('<h2>3. 최종 수행 평가 (RAFTS)</h2><table class="kv">'+kvRows_([
+      ['과제명',p.rafts.title||''],['R · 역할',p.rafts.role||''],['A · 독자',p.rafts.audience||''],['F · 형식',p.rafts.format||''],
+      ['T · 주제',p.rafts.topic||''],['S · 핵심 동사',p.rafts.strongVerb||''],['과제 지시문',p.rafts.task||'']
+    ])+'</table>');
+    if(p.rafts.rubric&&p.rafts.rubric.length) S.push('<h3>채점 루브릭</h3><table class="hd">'+hdRows_(['평가 축','A · 상','B · 중','C · 하'],p.rafts.rubric.map(function(r){return [r.criterion||'',r.A||'',r.B||'',r.C||''];}))+'</table>');
+  } else {
+    S.push('<h2>3. 최종 수행 평가 (GRASPS)</h2>');
+    if(p.grasps) S.push('<table class="kv">'+kvRows_([
+      ['과제명',p.grasps.title||''],['G · 목표',p.grasps.goal||''],['R · 역할',p.grasps.role||''],['A · 청중',p.grasps.audience||''],
+      ['S · 상황',p.grasps.situation||''],['P · 결과물',p.grasps.product||''],['S · 기준',p.grasps.standard||''],
+      ['형성평가 체크포인트',bulletsText_((p.grasps.checkpoints||[]).map(function(c){return c.name+(c.note?' — '+c.note:'');}))]
+    ])+'</table>');
+  }
+  S.push('<h2>4. 탐구 수업 흐름 (마샬·프렌치 7단계)</h2><table class="hd">'+
+    hdRows_(['스트랜드','단계','활동'], (p.flowTable||[]).map(function(row){ return [row.strand||'',row.phase,flowItemsText_(row.activities)]; }))+'</table>');
+  if(p.strategiesTable&&p.strategiesTable.length){
+    S.push('<h3>단계별 사고 전략 (공통 루틴 · 스트랜드 예외)</h3><table class="hd">'+
+      hdRows_(['단계','공통 사고 전략','스트랜드 예외'], p.strategiesTable.map(function(st){
+        var ov=(st.overrides&&st.overrides.length)?st.overrides.map(function(o){return '['+o.strand+'] '+strategyItemsText_(o.strategies);}).join('\n'):'';
+        return [st.phase, strategyItemsText_(st.strategies), ov];
+      }))+'</table>');
+  }
+  if(p.sequence&&p.sequence.length) S.push('<table class="kv"><tr><th>단원 전개 순서</th><td>'+esc_(p.sequence.join('  →  '))+'</td></tr></table>');
+  if(p.checkRows&&p.checkRows.length) S.push('<h2>5. 학습과학 자체 점검 결과</h2><table class="hd">'+
+    hdRows_(['판정','항목','근거 · 제안'], p.checkRows.map(function(c){ return [c.status==='warn'?'⚠ 보완':'✓ 통과',c.label,(c.evidence||'')+(c.advice?'\n제안: '+c.advice:'')]; }))+'</table>');
+  if(p.overview) S.push('<h2>6. 학생에게 들려줄 단원 개요</h2><p>'+nl2br_(p.overview)+'</p>');
+  S.push('<h2>참고문헌</h2><ul class="refs">'+[
+    'Marschall & French (2018). 『개념 기반 탐구학습의 실천』(학지사).',
+    'Erickson, Lanning & French (2017). 『생각하는 교실을 위한 개념기반 교육과정 및 수업』(학지사).',
+    '『개념 기반 교육과정 수업 설계의 이론과 실제』(박영스토리).',
+    'National Research Council (2000). How People Learn.',
+    'Wiggins & McTighe. Understanding by Design.'
+  ].map(function(t){return '<li>'+esc_(t)+'</li>';}).join('')+'</ul>');
+  S.push('<p class="foot">ⓒ 영쌤클래스 · 단원 설계 도우미로 생성 · '+esc_(dateStr_())+'</p>');
+
+  return '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>'+esc_(p.title||'단원 설계')+'</title>'+
+    '<style>'+
+    '@page{margin:16mm;}'+
+    'body{font-family:"맑은 고딕","Malgun Gothic",-apple-system,sans-serif;color:#222;line-height:1.55;font-size:11pt;padding:8px;}'+
+    'h1{font-size:20pt;margin:0 0 4px;} .sub{color:#6b6552;font-style:italic;margin:0 0 16px;}'+
+    'h2{font-size:14pt;color:#b45309;border-bottom:2px solid #eadfcf;padding-bottom:3px;margin:22px 0 10px;}'+
+    'h3{font-size:12pt;margin:16px 0 6px;}'+
+    'table{border-collapse:collapse;width:100%;margin:6px 0 14px;page-break-inside:auto;}'+
+    'th,td{border:1px solid #c8c0ae;padding:6px 9px;font-size:10pt;vertical-align:top;text-align:left;}'+
+    'table.kv th{background:#f3efe7;width:22%;white-space:nowrap;}'+
+    'table.hd tr:first-child th{background:#e9e3d3;}'+
+    'tr{page-break-inside:avoid;}'+
+    'ul.refs{font-size:10pt;} .foot{color:#888070;font-style:italic;font-size:9pt;margin-top:20px;}'+
+    '@media print{.noprint{display:none;}}'+
+    '.noprint{position:fixed;top:12px;right:12px;background:#b45309;color:#fff;border:none;padding:10px 16px;border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;}'+
+    '</style></head><body>'+
+    '<button class="noprint" onclick="window.print()">🖨 인쇄 · PDF로 저장</button>'+
+    S.join('')+
+    '<script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>'+
+    '</body></html>';
 }
 
 /* ══════════ 5. google.script.run 호환 심(shim) ══════════ */
@@ -1070,7 +1404,7 @@ var __API = {
   generatePreconceptions: generatePreconceptions, generateGeneralizations: generateGeneralizations,
   generateQuestions: generateQuestions, generateGrasps: generateGrasps, generateRafts: generateRafts,
   generateFlowStrand: generateFlowStrand, generateStrategies: generateStrategies, generateReview: generateReview,
-  authPing: authPing, exportDesign: exportDesign, exportPdf: exportPdf
+  exportDesign: exportDesign, exportPdf: exportPdf
 };
 
 function normErr_(e){
