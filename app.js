@@ -1059,9 +1059,40 @@ function generateReview(ctx) {
  */
 var DOCX_TABLE_BORDER = 'C8C0AE', KV_LABEL_BG = 'F3EFE7', TH_BG = 'E9E3D3';
 
+var DOCX_CDNS_ = [
+  'https://cdn.jsdelivr.net/npm/docx@9.7.1/dist/index.iife.js',
+  'https://unpkg.com/docx@9.7.1/dist/index.iife.js'
+];
+var docxLoading_ = null;
+
 function ensureDocx_(){
   if (!window.docx) throw new Error('문서 생성 구성요소를 불러오지 못했어요. 인터넷 연결을 확인하고 페이지를 새로고침한 뒤 다시 시도해 주세요.');
   return window.docx;
+}
+
+/** docx 라이브러리 확보. index.html의 선로딩이 실패했으면 예비 CDN으로 직접 받아온다. */
+function loadDocx_(){
+  if (window.docx) return Promise.resolve(window.docx);
+  if (docxLoading_) return docxLoading_;
+  docxLoading_ = new Promise(function(resolve, reject){
+    var i = 0;
+    function tryNext(){
+      if (window.docx) { resolve(window.docx); return; }
+      if (i >= DOCX_CDNS_.length) {
+        docxLoading_ = null;
+        reject(new Error('문서 생성 구성요소를 불러오지 못했어요. 학교 네트워크가 외부 주소를 막고 있을 수 있습니다. 다른 네트워크(휴대폰 테더링 등)에서 다시 시도하거나, 우선 「PDF로 저장」을 이용해 주세요.'));
+        return;
+      }
+      var s = document.createElement('script');
+      s.src = DOCX_CDNS_[i++];
+      s.async = true;
+      s.onload = function(){ window.docx ? resolve(window.docx) : tryNext(); };
+      s.onerror = function(){ tryNext(); };
+      document.head.appendChild(s);
+    }
+    tryNext();
+  });
+  return docxLoading_;
 }
 
 function nlText_(s){ return s ? ('\n' + s) : ''; }
@@ -1266,9 +1297,7 @@ function safeFileName_(s){ return String(s||'단원설계').replace(/[\\/:*?"<>|
 /** 워드(.docx) 생성 → 다운로드. exportDesign(payload) 반환: {name} */
 function exportDesign(p){
   if(!p || !p.title) return Promise.reject(new Error('내보낼 설계 데이터가 비어 있습니다. 단원 설계를 끝까지 완성해 주세요.'));
-  var d;
-  try { d=ensureDocx_(); } catch(e){ return Promise.reject(e); }
-  return Promise.resolve().then(function(){
+  return loadDocx_().then(function(d){
     var doc=new d.Document({
       styles:{ default:{
         document:{ run:{ font:'맑은 고딕', size:20 } },
