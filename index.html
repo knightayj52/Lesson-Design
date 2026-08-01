@@ -112,6 +112,17 @@
 
   /* Concept mini-flow (옵션 카드 — 렌즈·단원명 등 공용) */
   .concept-sub{ font-size:12.5px; font-weight:600; color:var(--accent); margin-bottom:14px; }
+  .ci-official{ border:1.5px solid var(--line); border-left:4px solid var(--accent); border-radius:var(--r-sm); padding:14px 16px; margin:0 0 18px; }
+  .ci-off-head{ font-weight:700; font-size:14px; margin-bottom:10px; }
+  .ci-off-tag{ font-size:11px; font-weight:600; color:var(--ink-faint); border:1px solid var(--line); border-radius:999px; padding:2px 8px; margin-left:6px; vertical-align:1px; }
+  .ci-off-block{ margin:10px 0; }
+  .ci-off-area{ font-size:12.5px; font-weight:700; color:var(--accent); }
+  .ci-off-scope{ font-size:11px; font-weight:400; color:var(--ink-faint); margin-left:8px; }
+  .ci-off-list{ margin:5px 0 0; padding-left:18px; }
+  .ci-off-list li{ font-size:13px; line-height:1.6; margin:3px 0; }
+  .ci-off-note{ font-size:12px; color:var(--ink-faint); border-top:1px dashed var(--line); margin-top:12px; padding-top:9px; line-height:1.6; }
+  .ci-sub{ font-weight:700; font-size:14px; margin:0 0 8px; }
+  .ci-src{ display:inline-block; font-size:11px; color:var(--ink-faint); border:1px solid var(--line); border-radius:999px; padding:1px 7px; margin-left:6px; }
   .opt-cards{ display:flex; flex-direction:column; gap:10px; margin-top:6px; }
   .opt-card{ border:1.5px solid var(--line); border-radius:var(--r-sm); padding:14px 16px; cursor:pointer; transition:all .15s; }
   .opt-card:hover{ border-color:var(--line-strong); background:#FDFCF9; }
@@ -508,6 +519,7 @@
   var lensCandidates = null, lensSelection = [], conceptBasis = '';
   var titleCandidates = null, titleSelection = null, titleBasis = '';
   var coreIdeaCandidates = null, coreIdeaSelection = null, coreIdeaBasis = '';
+  var officialIdeas = null, officialIdeasBasis = '';
   var strandCandidates = null, strandSel = {}, customStrands = [], strandBasis = '';
   var kwCandidates = null, kwSel = {}, customKw = {}, kwBasis = '';
   var preconCandidates = null, preconSel = {}, customPrecons = [], preconBasis = '';
@@ -1674,28 +1686,70 @@
     if(!coreIdeaCandidates || coreIdeaBasis!==basis){
       if(coreIdeaBasis!==basis){ designState.concept.coreIdea=null; coreIdeaSelection=null; renderSummary(); }
       coreIdeaBasis=basis;
-      setLoading(true,'핵심 아이디어를 제안받는 중…');
-      google.script.run.withSuccessHandler(function(res){
-          setLoading(false);
-          coreIdeaCandidates=(res && res.coreIdeas) ? res.coreIdeas : [];
-          if(!coreIdeaCandidates.length) toast('핵심 아이디어 후보를 받지 못했어요. 다시 시도해 주세요.', true);
-          renderCoreIdeaCards();
-        })
-        .withFailureHandler(function(err){ setLoading(false); toast('핵심 아이디어 제안을 받지 못했습니다: '+err.message, true); })
-        .generateCoreIdeas(conceptContextFull_());
+      setLoading(true,'교육과정 원문을 확인하는 중…');
+      // 공식 핵심 아이디어 원문 조회(API 호출 아님) → 그 근거로 후보 생성
+      fetchOfficialIdeas_(function(){
+        setLoading(true,'핵심 아이디어를 제안받는 중…');
+        var ctx=conceptContextFull_();
+        ctx.officialCoreIdeas=officialIdeas||[];
+        ctx.preconceptions=preconStatements_();
+        google.script.run.withSuccessHandler(function(res){
+            setLoading(false);
+            coreIdeaCandidates=(res && res.coreIdeas) ? res.coreIdeas : [];
+            if(!coreIdeaCandidates.length) toast('핵심 아이디어 후보를 받지 못했어요. 다시 시도해 주세요.', true);
+            renderCoreIdeaCards();
+          })
+          .withFailureHandler(function(err){ setLoading(false); toast('핵심 아이디어 제안을 받지 못했습니다: '+err.message, true); })
+          .generateCoreIdeas(ctx);
+      });
       return;
     }
     renderCoreIdeaCards();
   }
+  /** 선택 성취기준의 (교과×영역) 공식 핵심 아이디어 원문 — 데이터 조회라 호출 예산과 무관 */
+  function fetchOfficialIdeas_(done){
+    var sig=standardsSig_();
+    if(officialIdeas && officialIdeasBasis===sig){ done(); return; }
+    google.script.run.withSuccessHandler(function(list){
+        officialIdeas=list||[]; officialIdeasBasis=sig; done();
+      })
+      .withFailureHandler(function(){ officialIdeas=[]; officialIdeasBasis=sig; done(); })
+      .getOfficialCoreIdeas(designState.selectedStandards);
+  }
+  function preconStatements_(){
+    var out=[], sel=selectedPrecons_();
+    for(var i=0;i<sel.length;i++) out.push(sel[i].name+(sel[i].note?' — '+sel[i].note:''));
+    return out;
+  }
+  /** 교육과정 원문 카드(수정 불가 영역) */
+  function officialIdeasHtml_(){
+    if(!officialIdeas || !officialIdeas.length) return '';
+    var h='<div class="ci-official"><div class="ci-off-head">📘 2022 개정 교육과정 핵심 아이디어 <span class="ci-off-tag">원문 그대로</span></div>';
+    for(var i=0;i<officialIdeas.length;i++){
+      var e=officialIdeas[i];
+      h+='<div class="ci-off-block"><div class="ci-off-area">'+esc(e.subject)+' · '+esc(e.domain)+' 영역'
+        +(e.appliesTo?'<span class="ci-off-scope">적용 '+esc(e.appliesTo)+'</span>':'')+'</div><ul class="ci-off-list">';
+      for(var j=0;j<e.ideas.length;j++) h+='<li>'+esc(e.ideas[j].text)+'</li>';
+      h+='</ul></div>';
+    }
+    h+='<div class="ci-off-note">여러 학년군에 걸친 진술이에요. 아래 후보는 이 원문을 <b>우리 학년·이 단원 수준으로 다시 세운 것</b>이며, 공식 문서에 그대로 옮겨 쓰는 문장이 아닙니다.</div></div>';
+    return h;
+  }
   function renderCoreIdeaCards(){
     if(!coreIdeaSelection && designState.concept.coreIdea) coreIdeaSelection=designState.concept.coreIdea;
+    var hasOff=(officialIdeas && officialIdeas.length);
     var html='<h2>이 단원의 \'핵심 아이디어\'를 정해요</h2>'
-      +'<p class="lead">핵심 아이디어는 학생이 이 단원에서 도달할 가장 중요한 일반화예요. 렌즈 \''+esc(lensName_())+'\'를 담아 제안했어요 — 하나를 고르거나 직접 적어도 됩니다.</p>'
+      +'<p class="lead">'+(hasOff
+        ? '교육과정 원문을 먼저 확인하고, 그것을 <b>우리 학년 수준으로 다시 세운</b> 후보를 제안했어요 — 하나를 고르거나 직접 적어도 됩니다.'
+        : '핵심 아이디어는 학생이 이 단원에서 도달할 가장 중요한 일반화예요. 렌즈 \''+esc(lensName_())+'\'를 담아 제안했어요 — 하나를 고르거나 직접 적어도 됩니다.')+'</p>'
+      +officialIdeasHtml_()
+      +(hasOff?'<div class="ci-sub">이 단원의 핵심 아이디어 후보</div>':'')
       +'<div class="opt-cards">';
     for(var i=0;i<coreIdeaCandidates.length;i++){
       var c=coreIdeaCandidates[i];
       var sel=(coreIdeaSelection && coreIdeaSelection.statement===c.statement)?' sel':'';
-      html+='<div class="opt-card idea-card'+sel+'" data-i="'+i+'"><div class="opt-name">'+esc(c.statement)+'</div><div class="opt-note">'+esc(c.note)+'</div></div>';
+      var srcTag=(c.sourceId)?'<span class="ci-src">원문 '+esc(c.sourceId)+' 근거</span>':'';
+      html+='<div class="opt-card idea-card'+sel+'" data-i="'+i+'"><div class="opt-name">'+esc(c.statement)+'</div><div class="opt-note">'+esc(c.note)+srcTag+'</div></div>';
     }
     var customVal=(coreIdeaSelection && coreIdeaSelection.note==='(직접 입력)')?coreIdeaSelection.statement:'';
     html+='<div class="opt-card opt-custom idea-custom'+(customVal?' sel':'')+'" data-i="custom"><div class="opt-name">직접 입력</div>'
@@ -3441,6 +3495,7 @@
           lensCandidates:lensCandidates, conceptBasis:conceptBasis,
           titleCandidates:titleCandidates, titleBasis:titleBasis,
           coreIdeaCandidates:coreIdeaCandidates, coreIdeaBasis:coreIdeaBasis,
+          officialIdeas:officialIdeas, officialIdeasBasis:officialIdeasBasis,
           strandCandidates:strandCandidates, customStrands:customStrands, strandBasis:strandBasis,
           kwCandidates:kwCandidates, customKw:customKw, kwBasis:kwBasis,
           preconCandidates:preconCandidates, customPrecons:customPrecons, preconBasis:preconBasis,
@@ -3688,6 +3743,7 @@
     lensCandidates=c.lensCandidates||null; conceptBasis=c.conceptBasis||'';
     titleCandidates=c.titleCandidates||null; titleBasis=c.titleBasis||'';
     coreIdeaCandidates=c.coreIdeaCandidates||null; coreIdeaBasis=c.coreIdeaBasis||'';
+    officialIdeas=c.officialIdeas||null; officialIdeasBasis=c.officialIdeasBasis||'';
     strandCandidates=c.strandCandidates||null; customStrands=c.customStrands||[]; strandBasis=c.strandBasis||'';
     kwCandidates=c.kwCandidates||null; customKw=c.customKw||{}; kwBasis=c.kwBasis||'';
     preconCandidates=c.preconCandidates||null; customPrecons=c.customPrecons||[]; preconBasis=c.preconBasis||'';
