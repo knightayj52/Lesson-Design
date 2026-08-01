@@ -135,6 +135,56 @@ function getAreas(gradeBand, subject){
   });
 }
 
+/* ── 핵심 아이디어(2022 개정 원문) ── */
+var coreIdeasCache = null;
+
+function loadCoreIdeas_(){
+  if (coreIdeasCache) return Promise.resolve(coreIdeasCache);
+  return fetchJson_('core-ideas.json').then(function(d){
+    var map = {};
+    var list = (d && d.entries) || [];
+    for (var i = 0; i < list.length; i++) {
+      map[list[i].subject + '|' + list[i].domain] = list[i];
+    }
+    coreIdeasCache = map;
+    return map;
+  })['catch'](function(){ coreIdeasCache = {}; return coreIdeasCache; }); // 데이터 없으면 조용히 비활성
+}
+
+/**
+ * 선택한 성취기준들의 (교과 × 영역)에 해당하는 공식 핵심 아이디어를 모은다.
+ * 데이터가 없는 교과(사회·과학 등)는 빈 배열 — 화면·프롬프트 모두 조용히 넘어간다.
+ */
+function getOfficialCoreIdeas(standards){
+  var arr = standards || [];
+  return loadCoreIdeas_().then(function(map){
+    var out = [], seen = {};
+    for (var i = 0; i < arr.length; i++) {
+      var subj = arr[i].subject || arr[i].교과 || '';
+      var area = arr[i].area || arr[i].domain || '';
+      var key = subj + '|' + area;
+      if (!subj || !area || seen[key] || !map[key]) continue;
+      seen[key] = true;
+      out.push(map[key]);
+    }
+    return out;
+  });
+}
+
+/** 프롬프트에 넣을 근거 블록. 원문이 없으면 빈 문자열(기존 동작 유지). */
+function officialIdeasText_(official){
+  if (!official || !official.length) return '';
+  var lines = [];
+  for (var i = 0; i < official.length; i++) {
+    var e = official[i];
+    lines.push('[' + e.subject + ' · ' + e.domain + ' 영역] (적용 범위: ' + (e.appliesTo || '해당 학교급') + ')');
+    for (var j = 0; j < e.ideas.length; j++) {
+      lines.push('  (' + e.ideas[j].id + ') ' + e.ideas[j].text);
+    }
+  }
+  return lines.join('\n');
+}
+
 function getTonghapData(){
   if (tonghapCache) return Promise.resolve(tonghapCache);
   return fetchJson_('tonghap.json').then(function(d){ tonghapCache = d || { units: [] }; return tonghapCache; });
@@ -387,6 +437,15 @@ function standardsToText_(standards) {
  * 학년군 문자열로 학교급을 가린다. 반환: 'elemLow' | 'elemHigh' | 'middle' | 'high'
  * 중·고는 학년군에 "중학교"/"고등학교"가 들어오고, 초등은 코드(12 / 34 / 5~6)로 저/중고학년 구분.
  */
+/** 학년군별 어휘 수준 규칙 — 핵심 아이디어 재맥락화용 */
+function coreIdeaVocabRule_(gradeBand){
+  var st = gradeStage_(gradeBand);
+  if (st === 'elemLow') return '1~2학년이 아는 말만 써 — 추상적인 한자어(상호작용, 지속가능성, 정체성 같은 말)는 쓰지 말고 \'서로 도와요\', \'오래 이어져요\'처럼 겪어 본 일로 풀어 쓸 것.';
+  if (st === 'elemHigh') return '초등 중·고학년이 이해할 말로 — 학문 용어를 그대로 옮기지 말고(예: \'상호작용한다\' 대신 \'서로 영향을 준다\', \'지속가능성\' 대신 \'오래 이어 갈 수 있다\') 일상어와 교과어를 섞어 쓸 것.';
+  if (st === 'middle') return '중학생 수준으로 — 교과 개념어는 쓰되, 한 문장에 새 용어를 두 개 넘게 넣지 말 것.';
+  return '고등학생 수준의 개념어를 쓰되, 정의 나열이 아니라 개념 사이의 관계가 드러나게 쓸 것.';
+}
+
 function gradeStage_(gradeBand) {
   var g = (gradeBand || '').toString();
   if (g.indexOf('고등') > -1 || g.indexOf('고교') > -1) return 'high';
@@ -475,6 +534,19 @@ function generateCoreIdeas(ctx) {
   var lensName = (ctx.lens && ctx.lens.name) ? ctx.lens.name : '(미정)';
   var title = ctx.title || '';
 
+  var officialText = officialIdeasText_(ctx.officialCoreIdeas);
+  var anchorBlock = officialText
+    ? ('\n■ 2022 개정 교육과정 핵심 아이디어 원문 (이 단원이 속한 영역)\n' + officialText + '\n\n' +
+       '[재맥락화 지시 — 가장 중요]\n' +
+       '위 원문은 여러 학년군에 걸친 넓은 진술이야. 요약하거나 베끼지 말고, 이 학년 학생이 이번 단원의 성취기준 범위 안에서 실제로 도달할 수 있는 깨달음으로 다시 세워줘.\n' +
+       '- 원문의 개념적 방향은 지키되, 이 단원이 실제로 다루는 만큼으로 범위를 좁힐 것.\n' +
+       '- 원문에 없는 학문적 용어를 새로 끌어들이지 말 것.\n' +
+       '- 각 후보마다 어느 원문 문장에서 왔는지 그 번호(예: 국어-02-03)를 sourceId에 적을 것. 여러 문장을 엮었으면 쉼표로 나열.\n')
+    : '';
+  var preconText = (ctx.preconceptions && ctx.preconceptions.length)
+    ? ('\n이 학년 학생들이 흔히 가진 생각·오개념(출발점):\n- ' + ctx.preconceptions.join('\n- ') + '\n')
+    : '';
+
   var prompt =
     '너는 2022 개정 교육과정의 개념 기반 탐구 학습(CBIL) 단원 설계를 돕는 전문가야.\n' +
     '아래 정보를 바탕으로, 이 단원을 관통하는 "핵심 아이디어(Core Idea)" 후보를 3개 제안해줘.\n\n' +
@@ -482,16 +554,19 @@ function generateCoreIdeas(ctx) {
     '교과: ' + ctx.subject + '\n' +
     '단원명: ' + title + '\n' +
     '개념적 렌즈: ' + lensName + '\n' +
-    '성취기준:\n' + standardsToText_(ctx.standards) + '\n\n' +
+    '성취기준:\n' + standardsToText_(ctx.standards) + '\n' +
+    preconText + anchorBlock + '\n' +
     '핵심 아이디어는 이 단원에서 학생이 도달하길 바라는 가장 중요한 일반화(전이 가능한 깨달음)야.\n' +
     '- 개념적 렌즈("' + lensName + '")와 성취기준의 핵심 개념을 연결한 완결된 한 문장으로 써줘.\n' +
     '- 시간·문화·상황을 초월해 적용되도록 현재 시제 평서문으로 서술해 — "~합니다/~해요" 같은 높임말이 아니라 "~한다/~된다"로 끝맺어 (예: "사회의 모습은 시간이 흐르며 변화한다").\n' +
     '- 고유명사나 특정 사례에 묶이지 않게, 개념 수준으로 일반화해.\n' +
     '- ' + gradeToneText_(ctx.gradeBand) + ' 말로.\n' +
+    '- ' + coreIdeaVocabRule_(ctx.gradeBand) + '\n' +
     '- 서로 다른 관점이나 깊이의 진술을 섞어서 제안해.\n' +
     '각 핵심 아이디어마다, 무엇을 담고 있는지 아주 짧은 한 줄 설명을 달아줘.\n\n' +
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해:\n' +
-    '{"coreIdeas":[{"statement":"핵심 아이디어 문장","note":"이 진술이 담은 것 한 줄"}]}';
+    '{"coreIdeas":[{"statement":"핵심 아이디어 문장","note":"이 진술이 담은 것 한 줄"' +
+    (officialText ? ',"sourceId":"근거가 된 원문 번호"' : '') + '}]}';
 
   return callGemini(prompt);
 }
@@ -1426,6 +1501,7 @@ function buildPrintHtml_(p){
 var __API = {
   getInitData: getInitData, getStandards: getStandards, getAreas: getAreas,
   getStrategyBank: function(){ return preloadBank_(); }, getTonghapData: getTonghapData,
+  getOfficialCoreIdeas: getOfficialCoreIdeas,
   hasUserApiKey: function(){ return Promise.resolve(hasUserApiKey()); },
   saveUserApiKey: saveUserApiKey, clearUserApiKey: clearUserApiKey, whoAmI: whoAmI,
   generateLenses: generateLenses, generateTitles: generateTitles, generateCoreIdeas: generateCoreIdeas,
