@@ -1,0 +1,45 @@
+// Run with: node tests/regression.cjs (no dependencies or API key).
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const root=path.resolve(__dirname,'..');
+function element(){return {value:'',textContent:'',innerHTML:'',hidden:false,style:{},classList:{add(){},remove(){},toggle(){}},querySelectorAll(){return []},querySelector(){return element()},setAttribute(){},getAttribute(){return ''},remove(){},prepend(){},addEventListener(){},focus(){}};}
+const nodes=new Map();const doc={getElementById(id){if(!nodes.has(id))nodes.set(id,element());return nodes.get(id);},addEventListener(){},querySelectorAll(){return []},querySelector(){return element()},createElement:element};
+const stored=new Map();const storage={getItem:k=>stored.get(k)||null,setItem:(k,v)=>stored.set(k,String(v)),removeItem:k=>stored.delete(k)};
+const context={console,document:doc,window:{localStorage:storage,scrollTo(){}},setTimeout,clearTimeout,Blob,URL,Map,Set,Number,Date,JSON,MutationObserver:function(){this.observe=()=>{};}};
+vm.createContext(context);
+let src=fs.readFileSync(path.join(root,'designer.js'),'utf8');
+src=src.replace('  window.__designState=function()',`window.test={run:function(code){return eval(code);}};\n  window.__designState=function()`);
+vm.runInContext(src,context);const run=s=>context.window.test.run(s);
+run(`Object.keys(document).length; el.bandSel=document.getElementById('bandSelect'); el.subjSel=document.getElementById('subjectSelect'); el.bandSel.value='3~4학년군'; el.subjSel.value='사회'; currentStep=1; maxStep=1; designState.gradeBand='3~4학년군';designState.subject='사회';designState.selectedStandards=[{code:'[4사04-02]',statement:'교통 변화',subject:'사회'}];lensSelection=[{name:'변화',rationale:'직접 입력'}];genSel={'draft':true};qSel={'draft':true};reflectAns={'0':'아직 확정하지 않은 성찰'};rawFields_={'unfinished':'입력 중'};`);
+let snap=run('saveLocal_()');assert.equal(snap.v,2);let saved=JSON.parse(storage.getItem(run('storeKey_()')));
+assert.equal(saved.drafts.reflectAns[0],'아직 확정하지 않은 성찰');assert.equal(saved.drafts.lensSelection[0].name,'변화');assert.equal(saved.drafts.rawFields.unfinished,'입력 중');
+run(`reflectAns={};lensSelection=[];restoreDrafts_(JSON.parse(window.localStorage.getItem(storeKey_())).drafts);`);
+assert.equal(run('reflectAns[0]'),'아직 확정하지 않은 성찰');assert.equal(run('lensSelection[0].name'),'변화');
+console.log('PASS unconfirmed selections, reflection and raw input survive snapshot round trip');
+storage.setItem=(k,v)=>{throw Error('quota')};assert.equal(run('saveLocal_().drafts.reflectAns[0]'),'아직 확정하지 않은 성찰');assert.match(doc.getElementById('saveStatus').textContent,/저장하지 못/);storage.setItem=(k,v)=>stored.set(k,String(v));
+console.log('PASS storage failure reported and current in-memory snapshot remains exportable');
+assert.equal(run('standardsSig_()'),'[4사04-02]');console.log('PASS legacy snapshots keep their original dependency signature');
+run(`designState.teachingContext={totalLessons:12,lessonMinutes:40,classContext:'24명',rubricFocus:'inquiry'};`);
+assert.equal(run('conceptContext_().teachingContext.totalLessons'),12);
+run(`designState.concept.strands=[{name:'교통'}];flowSeq=['0:engage','0:focus','0:engage'];designState.lessonPlan=[{key:'0:engage',lessons:2},{key:'0:focus',lessons:3},{key:'0:engage',lessons:1}];lessonPlanHtml_();`);
+assert.equal(run('designState.lessonPlan[2].lessons'),1);assert.match(run('lessonTotalText_()'),/배정 6차시.*6차시 미배정/);
+run(`designState.lessonPlan[0].lessons=10;`);assert.match(run('lessonTotalText_()'),/2차시 초과/);
+console.log('PASS teaching context and repeated-phase lesson allocations');
+assert.throws(()=>run(`validateBackup_({format:'cbil-unit-backup',version:1,snapshot:{}})`));
+context.backup={format:'cbil-unit-backup',version:1,snapshot:saved};assert.equal(run('validateBackup_(backup).v'),2);
+context.backup.snapshot.currentStep=100;assert.throws(()=>run('validateBackup_(backup)'));context.backup.snapshot.currentStep=1;
+context.backup.snapshot.designState=JSON.parse('{"__proto__":{},"selectedStandards":[{"code":"x","statement":"x"}],"concept":{"strands":[]},"generalizations":[]}');assert.throws(()=>run('validateBackup_(backup)'));
+console.log('PASS malformed backup, invalid step and prototype keys rejected');
+// Execute backend with fetch mocked: no real model request or billing.
+const backend={console,window:{localStorage:storage,dispatchEvent(){}},setTimeout,clearTimeout,AbortController,CustomEvent:function(n,o){this.detail=o.detail;},fetch:async()=>({status:200,text:async()=>JSON.stringify({candidates:[{content:{parts:[{text:'{"lenses":[]}'}]}}]})})};vm.createContext(backend);
+let app=fs.readFileSync(path.join(root,'app.js'),'utf8').replace('window.google = window.google || {};','window.test={teachingContextText_,buildPrintHtml_,generateLenses,generateRafts,fetchGemini_};\nwindow.google = window.google || {};');vm.runInContext(app,backend);
+(async()=>{
+let sent='';storage.setItem('cbil_gemini_key_v1','test-only-not-a-real-key');backend.fetch=async(u,opts)=>{sent=JSON.parse(opts.body).contents[0].parts[0].text;return {status:200,text:async()=>JSON.stringify({candidates:[{content:{parts:[{text:'{"lenses":[]}'}]}}]})};};
+await backend.window.test.generateLenses({standards:[],teachingContext:{totalLessons:12,classContext:'24명'}});assert.match(sent,/총 차시: 12/);assert.match(sent,/24명/);
+await backend.window.test.generateRafts({standards:[],teachingContext:{rubricFocus:'inquiry'}});assert.match(sent,/개념 이해 · 근거 활용 · 전이/);
+console.log('PASS teaching constraints and selected rubric axes reach generated prompts');
+const print=backend.window.test.buildPrintHtml_({title:'시험',teachingContext:{totalLessons:12,lessonMinutes:40},lessonPlan:[{label:'조사',lessons:3}],reflect:{0:'성찰 <script>'}});
+assert.match(print,/총 12차시/);assert.match(print,/차시 배분/);assert.match(print,/3차시/);assert.ok(!print.includes('성찰 <script>'));
+console.log('PASS PDF print payload includes context, lesson allocation without exporting private reflection');
+backend.fetch=async()=>{const e=Error('abort');e.name='AbortError';throw e;};await assert.rejects(backend.window.test.fetchGemini_('test',{}),/응답 대기 시간/);
+console.log('PASS network timeout produces recoverable message');
+})().catch(e=>{console.error(e);process.exitCode=1});

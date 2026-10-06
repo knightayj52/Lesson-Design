@@ -1,12 +1,12 @@
 /**
- * CBIL 단원 설계 도우미 — v3.0 (GitHub Pages 정적 앱)
+ * CBIL 단원 설계 도우미 — v3.1 (GitHub Pages 정적 앱)
  * ------------------------------------------------------------------
  * 역할: 기존 앱스크립트 서버(.gs)를 브라우저 안에서 그대로 재현한다.
  *   · google.script.run 호환 심(shim) — 클라이언트(Index.html) 코드는 무수정 이식
  *   · 성취기준/전략은행/통합교과 = repo의 data/*.json (SpreadsheetApp 대체)
  *   · Gemini 호출 = 브라우저 fetch 직접 호출 (UrlFetchApp 대체, 429/503 사다리 유지)
  *   · API 키 = localStorage (UserProperties 대체 — 이 브라우저에만 저장)
- *   · 내보내기 = 다음 빌드에서 .docx 다운로드로 구현 예정(현재 안내 스텁)
+ *   · 내보내기 = .docx 다운로드 및 인쇄용 PDF
  * 두뇌(CBIL 단계 로직)는 v2.5 CBIL.gs 원문 그대로다 — 아래 [CBIL 원문] 구획.
  * ⓒ 영쌤클래스
  */
@@ -194,7 +194,7 @@ function getTonghapData(){
 function getApiKeyOrThrow_(){
   var key = null;
   try { key = window.localStorage.getItem(KEY_STORE); } catch (e) {}
-  if (!key) throw new Error('API 키가 등록되어 있지 않아요. 화면 오른쪽 위 🔑 API 키 버튼에서 본인 키를 등록해 주세요(무료, 1분 소요).');
+  if (!key) throw new Error('API 키가 등록되어 있지 않아요. 화면 오른쪽 위 🔑 API 키 버튼에서 본인 키를 등록해 주세요(AI 기능 사용 시 필요).');
   return key;
 }
 
@@ -236,8 +236,9 @@ function testKey_(key){
     .then(function(res){
       if (res.status === 200) return 'ok';
       if (res.status === 429 || res.status === 503) return 'quota';
-      return 'invalid';
-    }, function(){ return 'invalid'; });
+      if(res.status===400||res.status===401||res.status===403) return 'invalid';
+      throw new Error('AI 연결 확인 중 오류가 발생했습니다(HTTP '+res.status+'). 잠시 후 다시 시도해 주세요.');
+    }, function(){ throw new Error('네트워크 연결을 확인한 뒤 다시 시도해 주세요.'); });
 }
 
 function msgOf_(e){ return (e && e.message) ? e.message : String(e || ''); }
@@ -264,7 +265,7 @@ function callGeminiLadder_(prompt, schema){
         if (both.indexOf('QUOTA_MINUTE') !== -1) {
           throw new Error('요청이 잠깐 몰렸어요(분당 호출 한도). 1분쯤 뒤에 같은 버튼을 다시 눌러 주세요 — 진행 내용은 자동 저장되어 있습니다.');
         }
-        throw new Error('오늘 치 무료 호출 한도를 모두 사용했어요. 무료 한도는 한국 시간 오후 4시쯤 다시 채워집니다. 진행 내용은 자동 저장되어 있으니 그때 이어서 하면 됩니다.');
+        throw new Error('오늘 치 무료 호출 한도를 모두 사용했어요. 한도와 초기화 시각은 Google AI Studio에서 확인해 주세요. 진행 내용은 자동 저장되어 있으니 그때 이어서 하면 됩니다.');
       }
       if (isOverloadError_(e2)) {
         throw new Error('Gemini 서버가 일시적으로 혼잡해요. 잠시 뒤 같은 버튼을 다시 눌러 주세요 — 진행 내용은 자동 저장되어 있습니다.');
@@ -275,9 +276,11 @@ function callGeminiLadder_(prompt, schema){
 }
 
 function fetchGemini_(url, payload){
-  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-    .then(function(res){ return res.text().then(function(body){ return { code: res.status, body: body }; }); },
-          function(){ throw new Error('네트워크 오류로 Gemini에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.'); });
+  var controller=new AbortController(), timer=setTimeout(function(){controller.abort();},60000);
+  return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal})
+    .then(function(res){return res.text().then(function(body){return {code:res.status,body:body};});})
+    .catch(function(err){throw new Error(err.name==='AbortError'?'응답 대기 시간이 길어졌어요. 초안은 유지됩니다. 다시 요청하거나 직접 작성해 주세요.':'네트워크 오류로 Gemini에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.');})
+    .finally(function(){clearTimeout(timer);});
 }
 
 function callGeminiModel_(model, prompt, schema){
@@ -477,6 +480,11 @@ function gradeToneText_(gradeBand) {
  * @param {Object} ctx { gradeBand, subject, standards:[{code, statement}, ...] }
  * @return {Object} { lenses: [{ name, rationale }, ...] }
  */
+function teachingContextText_(ctx){
+  var c=ctx.teachingContext||{}, plan=ctx.lessonPlan||[];
+  return '\n[실제 수업 여건]\n총 차시: '+(c.totalLessons||'미입력 — 기간에 대한 단정 금지')+'\n한 차시 시간: '+(c.lessonMinutes||'미입력')+'분\n학급 여건: '+(c.classContext||'미입력')+'\n차시 배분: '+JSON.stringify(plan)+'\n위 조건에 맞춰 실행 가능한 분량과 비계를 제안해. 총 차시가 없으면 현실성 점검에서 기간 정보가 필요하다고 명시해.';
+}
+
 function generateLenses(ctx) {
   var prompt =
     '너는 2022 개정 교육과정의 개념 기반 탐구 학습(CBIL) 단원 설계를 돕는 전문가야.\n' +
@@ -493,7 +501,7 @@ function generateLenses(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해:\n' +
     '{"lenses":[{"name":"렌즈 이름","rationale":"이 성취기준에 적합한 이유"}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -522,7 +530,7 @@ function generateTitles(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해:\n' +
     '{"titles":[{"title":"단원명","note":"이 제목의 장점 한 줄"}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -568,7 +576,7 @@ function generateCoreIdeas(ctx) {
     '{"coreIdeas":[{"statement":"핵심 아이디어 문장","note":"이 진술이 담은 것 한 줄"' +
     (officialText ? ',"sourceId":"근거가 된 원문 번호"' : '') + '}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -597,7 +605,7 @@ function generateStrands(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해:\n' +
     '{"strands":[{"name":"스트랜드 이름","note":"무엇을 다루는지 한 줄"}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -630,7 +638,7 @@ function generateStrandConcepts(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해(각 키는 스트랜드 이름, 값은 개념 문자열 배열):\n' +
     '{"byStrand":{"스트랜드이름":["개념1","개념2","개념3"]}}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -662,7 +670,7 @@ function generatePreconceptions(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해:\n' +
     '{"preconceptions":[{"statement":"학생의 생각 한 문장","note":"왜 중요한지 한 줄"}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -710,7 +718,7 @@ function generateGeneralizations(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해(byStrand의 키는 위 스트랜드 이름을 그대로):\n' +
     '{"byStrand":{"스트랜드이름":[{"statement":"일반화 문장","note":"연결 개념 한 줄"}]},"lens":[{"statement":"일반화 문장","note":"연결 개념 한 줄"}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -766,7 +774,7 @@ function generateQuestions(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해(index는 위 일반화 목록의 번호):\n' +
     '{"byGen":[{"index":1,"factual":["질문"],"conceptForm":["질문"],"conceptual":["질문"]}],"debatable":["질문"],"metacognitive":["질문"]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -806,7 +814,7 @@ function generateGrasps(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해:\n' +
     '{"scenarios":[{"title":"","pitch":"","goal":"","role":"","audience":"","situation":"","product":"","standard":"","transferNote":""}],"checkpoints":[{"name":"","note":""}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -817,7 +825,7 @@ function generateGrasps(ctx) {
  * @return {Object} { scenarios:[{title,pitch,role,audience,format,topic,strongVerb,task,transferNote}], rubric:[{criterion,A,B,C}], checkpoints:[{name,note}] }
  */
 function generateRafts(ctx) {
-  var RUBRIC_AXES = ['내용', '조직', '표현']; // ← 지식·기능·태도로 바꾸려면 이 한 줄만 교체
+  var RUBRIC_AXES = (ctx.teachingContext||{}).rubricFocus==='inquiry'?['개념 이해','근거 활용','전이']:['내용','조직','표현']; // ← 지식·기능·태도로 바꾸려면 이 한 줄만 교체
 
   var lensName = (ctx.lens && ctx.lens.name) ? ctx.lens.name : '(미정)';
   var strandText = (ctx.strands && ctx.strands.length) ? ctx.strands.join(', ') : '(미정)';
@@ -859,7 +867,7 @@ function generateRafts(ctx) {
     '{"scenarios":[{"title":"","pitch":"","role":"","audience":"","format":"","topic":"","strongVerb":"","task":"","transferNote":""}],"rubric":[\n' +
     rubricShape.join(',\n') + '\n],"checkpoints":[{"name":"","note":""}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -932,7 +940,7 @@ function generateFlowStrand(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해:\n' +
     '{"flow":{"engage":[{"name":"","note":"","science":""}],"focus":[{"name":"","note":"","science":""}],"investigate":[{"name":"","note":"","science":""}],"organize":[{"name":"","note":"","science":""}],"generalize":[{"name":"","note":"","science":""}],"transfer":[{"name":"","note":"","science":""}],"reflect":[{"name":"","note":"","science":""}]}}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -985,7 +993,7 @@ function generateStrategies(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해:\n' +
     '{"strategies":{"engage":[{"name":"","note":"","science":""}],"focus":[{"name":"","note":"","science":""}],"investigate":[{"name":"","note":"","science":""}],"organize":[{"name":"","note":"","science":""}],"generalize":[{"name":"","note":"","science":""}],"transfer":[{"name":"","note":"","science":""}],"reflect":[{"name":"","note":"","science":""}]}}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /**
@@ -1122,7 +1130,7 @@ function generateReview(ctx) {
     '설명이나 마크다운 없이 아래 JSON 형식으로만 답해(check는 위 10개 id를 모두 포함):\n' +
     '{"check":[{"id":"precon","status":"pass","evidence":"","advice":""}],"overviews":[{"text":"","note":""}]}';
 
-  return callGemini(prompt);
+  return callGemini(prompt + teachingContextText_(ctx));
 }
 
 /* ══════════ 4. 내보내기 (docx.js 워드 + 인쇄 PDF) ══════════ */
@@ -1258,6 +1266,7 @@ function buildDocxChildren_(p){
   K.push(kvTable_([
     ['단원명', (p.title||'')+nlText_(p.titleNote)],
     ['교과 / 학년군', (p.subject||'')+' / '+(p.gradeBand||'')],
+    ['수업 여건', contextExportText_(p)],
     ['성취기준', stdLines_(p.standards)],
     ['개념적 렌즈', (p.lens||'')+nlText_(p.lensNote)],
     ['핵심 아이디어', (p.coreIdea||'')+nlText_(p.coreIdeaNote)],
@@ -1358,6 +1367,7 @@ function buildDocxChildren_(p){
   ];
   refs.forEach(function(t){ K.push(new d.Paragraph({ text:t, bullet:{ level:0 }, spacing:{ after:20 }, children:undefined })); });
 
+  if(p.lessonPlan&&p.lessonPlan.length){K.push(h2_('차시 배분'));K.push(kvTable_(p.lessonPlan.map(function(r){return [r.label,String(r.lessons)+'차시'];})));}
   K.push(spacer_());
   K.push(new d.Paragraph({ children:[new d.TextRun({ text:'ⓒ 영쌤클래스 · 단원 설계 도우미로 생성 · '+dateStr_(), italics:true, size:18, color:'888070' })] }));
   return K;
@@ -1418,13 +1428,14 @@ function hdRows_(header, rows){
   var b=(rows||[]).map(function(cells){ return '<tr>'+cells.map(function(c){ return '<td>'+nl2br_(c)+'</td>'; }).join('')+'</tr>'; }).join('');
   return h+b;
 }
+function contextExportText_(p){var c=p.teachingContext||{};return '총 '+(c.totalLessons||'미정')+'차시 · 차시당 '+(c.lessonMinutes||'미정')+'분'+(c.classContext?'\n'+c.classContext:'');}
 function buildPrintHtml_(p){
   var S=[];
   S.push('<h1>'+esc_(p.title||'단원 설계')+'</h1>');
   S.push('<p class="sub">개념 기반 탐구 단원 설계안 · '+esc_(p.gradeBand||'')+' · '+esc_(p.subject||'')+'</p>');
   S.push('<h2>1. 단원 개요</h2><table class="kv">'+kvRows_([
     ['단원명',(p.title||'')+nlText_(p.titleNote)],['교과 / 학년군',(p.subject||'')+' / '+(p.gradeBand||'')],
-    ['성취기준',stdLines_(p.standards)],['개념적 렌즈',(p.lens||'')+nlText_(p.lensNote)],
+    ['수업 여건',contextExportText_(p)],['성취기준',stdLines_(p.standards)],['개념적 렌즈',(p.lens||'')+nlText_(p.lensNote)],
     ['핵심 아이디어',(p.coreIdea||'')+nlText_(p.coreIdeaNote)],['스트랜드',(p.strands||[]).join(' · ')],
     ['예상 선개념·오개념',bulletsText_(p.preconceptions)],['일반화 (개념적 이해)',numberedText_(p.generalizations)]
   ])+'</table>');
@@ -1475,6 +1486,7 @@ function buildPrintHtml_(p){
   ].map(function(t){return '<li>'+esc_(t)+'</li>';}).join('')+'</ul>');
   S.push('<p class="foot">ⓒ 영쌤클래스 · 단원 설계 도우미로 생성 · '+esc_(dateStr_())+'</p>');
 
+  if(p.lessonPlan&&p.lessonPlan.length)S.push('<h2>차시 배분</h2><table class="kv">'+kvRows_(p.lessonPlan.map(function(r){return [r.label,String(r.lessons)+'차시'];}))+'</table>');
   return '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>'+esc_(p.title||'단원 설계')+'</title>'+
     '<style>'+
     '@page{margin:16mm;}'+
@@ -1531,6 +1543,7 @@ function makeMethod_(name){
       if (self._ok) { try { self._ok(res); } catch (e) { console.error('[shim:' + name + '] 성공 핸들러 오류', e); } }
     }, function(err){
       err = normErr_(err);
+      if(name.indexOf('generate')===0) window.dispatchEvent(new CustomEvent('cbil-retry',{detail:{retry:function(){self[name].apply(self,args);}}}));
       if (self._fail) { try { self._fail(err); } catch (e2) { console.error('[shim:' + name + '] 실패 핸들러 오류', e2); } }
       else console.error('[shim:' + name + ']', err);
     });
@@ -1554,3 +1567,4 @@ window.google.script = window.google.script || {};
 window.google.script.run = runBase;
 
 })();
+
