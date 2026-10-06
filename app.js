@@ -194,7 +194,7 @@ function getTonghapData(){
 function getApiKeyOrThrow_(){
   var key = null;
   try { key = window.localStorage.getItem(KEY_STORE); } catch (e) {}
-  if (!key) throw new Error('API 키가 등록되어 있지 않아요. 화면 오른쪽 위 🔑 API 키 버튼에서 본인 키를 등록해 주세요(AI 기능 사용 시 필요).');
+  if (!key) throw new Error('AI가 아직 연결되지 않았어요. 화면 오른쪽 위 ‘AI 연결’에서 API 키를 등록하거나, 아래에서 직접 작성해 주세요.');
   return key;
 }
 
@@ -1567,4 +1567,3 @@ window.google.script = window.google.script || {};
 window.google.script.run = runBase;
 
 })();
-

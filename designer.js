@@ -1167,7 +1167,7 @@
   function renderTitleCards(){
     if(!savedDrafts_ && !titleSelection && designState.concept.title) titleSelection=designState.concept.title;
     var html='<h2>단원명을 정해요</h2>'
-      +'<p class="lead">개념적 렌즈 \''+esc(lensName_())+'\'에 맞춰, 호기심을 자극하는 단원명을 제안했어요. 하나를 고르거나 직접 적어도 됩니다.</p>'
+      +'<p class="lead">개념적 렌즈 \''+esc(lensName_())+'\'에 맞춰, 호기심을 자극하는 단원명을 정해 보세요. AI 후보가 있으면 고르거나 직접 적어도 됩니다.</p>'
       +'<div class="opt-cards">';
     for(var i=0;i<titleCandidates.length;i++){
       var c=titleCandidates[i];
