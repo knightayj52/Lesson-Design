@@ -29,10 +29,26 @@ context.backup={format:'cbil-unit-backup',version:1,snapshot:saved};assert.equal
 context.backup.snapshot.currentStep=100;assert.throws(()=>run('validateBackup_(backup)'));context.backup.snapshot.currentStep=1;
 context.backup.snapshot.designState=JSON.parse('{"__proto__":{},"selectedStandards":[{"code":"x","statement":"x"}],"concept":{"strands":[]},"generalizations":[]}');assert.throws(()=>run('validateBackup_(backup)'));
 console.log('PASS malformed backup, invalid step and prototype keys rejected');
+const beforeFocus=run('standardsSig_()');run("designState.raftsRubricFocus='writing';");
+assert.equal(run('standardsSig_()'),beforeFocus);assert.equal(run('conceptContext_().teachingContext.rubricFocus'),'writing');
+const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+assert.ok(!html.slice(html.indexOf('id="panel-standards"'),html.indexOf('id="panel-concept"')).includes('rubricFocus'));
+assert.ok(html.includes('id="raftsFocusSettings"'));console.log('PASS assessment preference is contextual and preserves earlier design dependencies');
 // Execute backend with fetch mocked: no real model request or billing.
 const backend={console,window:{localStorage:storage,dispatchEvent(){}},setTimeout,clearTimeout,AbortController,CustomEvent:function(n,o){this.detail=o.detail;},fetch:async()=>({status:200,text:async()=>JSON.stringify({candidates:[{content:{parts:[{text:'{"lenses":[]}'}]}}]})})};vm.createContext(backend);
-let app=fs.readFileSync(path.join(root,'app.js'),'utf8').replace('window.google = window.google || {};','window.test={teachingContextText_,buildPrintHtml_,generateLenses,generateRafts,fetchGemini_};\nwindow.google = window.google || {};');vm.runInContext(app,backend);
+let app=fs.readFileSync(path.join(root,'app.js'),'utf8').replace('window.google = window.google || {};','window.test={teachingContextText_,buildPrintHtml_,generateLenses,generateRafts,fetchGemini_,getAiSettings,saveAiModel,saveUserApiKey,clearUserApiKey,callGeminiLadder_};\nwindow.google = window.google || {};');vm.runInContext(app,backend);
 (async()=>{
+const api=backend.window.test;assert.equal(api.getAiSettings().status,'missing');
+storage.setItem('cbil_gemini_key_v1','test-only-not-a-real-key');assert.equal(api.getAiSettings().status,'unchecked');
+let urls=[];backend.fetch=async(u)=>{urls.push(u);return {status:200,text:async()=>JSON.stringify({candidates:[{content:{parts:[{text:'{"ok":true}'}]}}]})};};
+await api.saveUserApiKey('','gemini-3.8-flash');assert.equal(api.getAiSettings().status,'verified');assert.match(urls[0],/gemini-3.8-flash:generateContent/);
+storage.setItem('cbil_gemini_key_v1','different-test-only-key');assert.equal(api.getAiSettings().status,'unchecked');
+api.saveAiModel('gemini-3.5-flash-lite');assert.equal(api.getAiSettings().status,'unchecked');assert.throws(()=>api.saveAiModel('invented-model'));
+urls=[];backend.fetch=async(u)=>{urls.push(u);return {status:429,text:async()=>'{"error":"daily quota"}'};};
+await assert.rejects(api.callGeminiLadder_('test'),/한도/);assert.equal(urls.length,1);assert.match(urls[0],/gemini-3.5-flash-lite:generateContent/);assert.equal(api.getAiSettings().status,'error');
+await assert.rejects(api.saveUserApiKey('new-test-key-not-real-123','gemini-3.5-flash'),/한도/);assert.equal(storage.getItem('cbil_gemini_key_v1'),'different-test-only-key');assert.notEqual(api.getAiSettings().status,'verified');
+await api.clearUserApiKey();assert.equal(api.getAiSettings().status,'missing');
+console.log('PASS missing, stored, verified, changed, quota and deleted key states; selected model never silently falls back');
 let sent='';storage.setItem('cbil_gemini_key_v1','test-only-not-a-real-key');backend.fetch=async(u,opts)=>{sent=JSON.parse(opts.body).contents[0].parts[0].text;return {status:200,text:async()=>JSON.stringify({candidates:[{content:{parts:[{text:'{"lenses":[]}'}]}}]})};};
 await backend.window.test.generateLenses({standards:[],teachingContext:{totalLessons:12,classContext:'24명'}});assert.match(sent,/총 차시: 12/);assert.match(sent,/24명/);
 await backend.window.test.generateRafts({standards:[],teachingContext:{rubricFocus:'inquiry'}});assert.match(sent,/개념 이해 · 근거 활용 · 전이/);

@@ -304,12 +304,12 @@
     document.getElementById('keyBody').addEventListener('click', function(e){
       if(e.target.id==='keySave'){ doSaveKey(); return; }
       if(e.target.id==='keyDel'){ doDelKey(); return; }
+      if(e.target.id==='modelSave'){doSaveModel_();return;}
     });
     applyTheme_(currentThemeId_());
-    google.script.run.withSuccessHandler(function(has){
-      keyRegistered=!!has;
-      document.getElementById('keyBtn').textContent=has?'AI 연결됨':'AI 연결';
-    }).withFailureHandler(function(){}).hasUserApiKey();
+    window.addEventListener('cbil-ai-state',function(e){updateAiStatus_(e.detail);});
+    window.addEventListener('storage',function(){refreshAiStatus_();});
+    refreshAiStatus_();
 
     el.stepper.addEventListener('click', function(e){
       var st=closestClass(e.target,'step'); if(!st) return;
@@ -886,7 +886,7 @@
   }
   function conceptContext_(){
     var stds=[]; for(var i=0;i<designState.selectedStandards.length;i++){ var s=designState.selectedStandards[i]; stds.push({code:s.code, statement:s.statement, subject:(s.subject||'')+(s.unit?(' · '+s.unit):'')}); }
-    return { gradeBand:designState.gradeBand, subject:designState.subject, standards:stds, teachingContext:designState.teachingContext||{} };
+    return { gradeBand:designState.gradeBand, subject:designState.subject, standards:stds, teachingContext:Object.assign({},designState.teachingContext||{},{rubricFocus:rubricFocus_()}) };
   }
   function conceptContextWithLens_(){
     var ctx=conceptContext_();
@@ -1817,6 +1817,7 @@
   // ── 4단계: 수행평가 (GRASPS 미니스텝 흐름) ──
   function renderGrasps(){
     var fw=assessFw_();
+    document.getElementById('raftsFocusSettings').hidden=fw!=='rafts'||graspsMini!==0; syncRubricFocus_();
     var labels=(fw==='rafts')?RAFTS_MINI:GRASPS_MINI;
     document.getElementById('graspsProgress').textContent='수행평가 · '+(graspsMini+1)+'/'+labels.length+' · '+labels[graspsMini];
     if(fw==='rafts'){
@@ -3078,49 +3079,45 @@
     document.getElementById('arcBody').innerHTML=html;
   }
   // ── API 키 (사용자별) ──
-  var keyRegistered=null;
-  function openKey_(){ renderKeyBody_(); show(document.getElementById('keyOverlay')); }
+  var keyRegistered=false, aiSettings_=null;
+  function updateAiStatus_(s){
+    aiSettings_=s;keyRegistered=!!s.hasKey;
+    var labels={missing:'AI 미연결 · 설정',unchecked:'AI 키 저장됨 · 확인 필요',checking:'AI 연결 확인 중',verified:'AI 응답 확인됨',error:'AI 연결 확인 필요'};
+    var b=document.getElementById('keyBtn');b.textContent=labels[s.status]||labels.unchecked;
+    b.title=(s.hasKey?'선택 모델: '+s.model+' · ':'')+(s.message||'설정을 열어 연결을 확인하세요.');
+    var n=document.getElementById('aiConnectionStatus');if(n)n.textContent=b.textContent+(s.message?' — '+s.message:'');
+  }
+  function refreshAiStatus_(){google.script.run.withSuccessHandler(updateAiStatus_).withFailureHandler(function(){document.getElementById('keyBtn').textContent='AI 상태 확인 필요';}).getAiSettings();}
+  function openKey_(){
+    google.script.run.withSuccessHandler(function(s){updateAiStatus_(s);renderKeyBody_();show(document.getElementById('keyOverlay'));}).withFailureHandler(function(e){toast(e.message,true);}).getAiSettings();
+  }
   function renderKeyBody_(){
-    var kb=document.getElementById('keyBody'), html='';
-    html+='<p class="key-note" id="keyWho" style="color:var(--ink-faint)">키 저장 위치 확인 중…</p>';
-    if(keyRegistered){
-      html+='<p class="key-note">✓ 이 브라우저에 API 키가 등록되어 있어요. 키는 이 브라우저에 저장되고 Google API 인증에 사용됩니다. 공용 기기에서는 사용 후 삭제해 주세요.</p>'
-        +'<p class="key-note">새 키로 바꾸려면 아래에 붙여넣고 저장하세요.</p>';
-    } else {
-      html+='<p class="key-note">이 앱은 <b>각자 자신의 Gemini API 키</b>로 작동해요. Google AI Studio에서 발급할 수 있습니다. 이용 한도와 비용은 계정 설정에 따라 달라집니다.</p>'
-        +'<p class="key-note">① <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio 키 발급 페이지 ↗</a>에 접속해 Google 계정으로 로그인<br>② <b>API 키 만들기(Create API key)</b> 클릭<br>③ 만들어진 키를 복사해 아래에 붙여넣기</p>'
-        +'<p class="key-note">키는 제작자 서버에 저장하지 않으며 Google API 인증에 사용됩니다. 설계에 입력한 내용은 AI 제안 요청 시 Google로 전송됩니다. 다른 컴퓨터에서는 다시 등록해 주세요. 비밀번호처럼 다른 곳에 공유하지 마세요.</p>';
-    }
-    html+='<input type="password" aria-label="Gemini API 키" class="key-input" id="keyInput" placeholder="AIza… 로 시작하는 키 붙여넣기" autocomplete="off">'
-      +'<div class="exp-row"><button type="button" class="btn btn-primary" id="keySave">저장</button>'
-      +(keyRegistered?'<button type="button" class="btn btn-ghost" id="keyDel">키 삭제</button>':'')
-      +'</div>';
-    kb.innerHTML=html;
-    var inp=document.getElementById('keyInput');
-    inp.addEventListener('keydown', function(ev){ if(ev.keyCode===13) doSaveKey(); });
-    google.script.run.withSuccessHandler(function(em){
-      var w=document.getElementById('keyWho');
-      if(w) w.innerHTML='키 저장 위치: <b>'+esc(em)+'</b> — 이 브라우저에만 저장됩니다.';
-    }).withFailureHandler(function(){}).whoAmI();
+    var s=aiSettings_||{models:[],hasKey:false}, html='<p class="key-note" id="aiConnectionStatus" role="status"></p>';
+    html+='<p class="key-note">'+(s.hasKey?'이 브라우저에 저장된 키가 있습니다. <b>저장 여부와 실제 연결 성공은 다릅니다.</b> 새 키를 입력하지 않으면 저장된 키로 확인합니다.':'AI는 아직 연결되지 않았습니다. 성취기준 탐색과 직접 작성은 연결 없이 가능합니다.')+'</p>';
+    html+='<label for="aiModel"><b>사용할 Gemini 모델</b></label><select id="aiModel">';
+    (s.models||[]).forEach(function(m){html+='<option value="'+esc(m.id)+'"'+(m.id===s.model?' selected':'')+'>'+esc(m.label)+'</option>';});
+    html+='</select><p class="key-note">선택한 모델만 사용하며 다른 모델로 자동 전환하지 않습니다. 사용 가능 여부·한도·비용은 Google 프로젝트마다 다릅니다. 모델을 바꾸어도 기존 설계 내용은 유지됩니다.</p>'
+      +'<p class="key-note"><a href="https://ai.google.dev/gemini-api/docs/models" target="_blank" rel="noopener">Google 모델 안내 ↗</a> · <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">API 키 발급 ↗</a></p>'
+      +'<label for="keyInput"><b>Gemini API 키</b></label><input type="password" class="key-input" id="keyInput" placeholder="'+(s.hasKey?'변경할 때만 새 키를 입력하세요':'발급받은 API 키를 붙여넣으세요')+'" autocomplete="off">'
+      +'<p class="key-note">키는 이 브라우저에 저장되고 Google 인증에 사용됩니다. 설계 내용은 AI 제안 요청 시 Google로 전송됩니다. 공용 기기에서는 사용 후 키를 삭제해 주세요.</p>'
+      +'<p class="key-note">연결 확인은 선택한 모델에 짧은 요청을 보내므로 이용 한도에 포함되며 계정 설정에 따라 비용이 발생할 수 있습니다.</p>'
+      +'<div class="exp-row"><button type="button" class="btn btn-primary" id="keySave">설정 저장·연결 확인</button><button type="button" class="btn btn-ghost" id="modelSave">모델만 저장</button>'
+      +(s.hasKey?'<button type="button" class="btn btn-ghost" id="keyDel">키 삭제</button>':'')+'</div>';
+    document.getElementById('keyBody').innerHTML=html;updateAiStatus_(s);
+    document.getElementById('keyInput').addEventListener('keydown',function(e){if(e.key==='Enter')doSaveKey();});
+  }
+  function doSaveModel_(){
+    google.script.run.withSuccessHandler(function(s){updateAiStatus_(s);toast('모델을 저장했습니다. 연결 확인은 아직 하지 않았습니다.');}).withFailureHandler(function(e){toast(e.message,true);}).saveAiModel(document.getElementById('aiModel').value);
   }
   function doSaveKey(){
-    var v=document.getElementById('keyInput').value;
-    if(!v || !v.replace(/\s/g,'')){ toast('키를 붙여넣어 주세요.', true); return; }
-    setLoading(true,'키를 확인하는 중…');
-    google.script.run.withSuccessHandler(function(res){
-        setLoading(false); keyRegistered=true;
-        hide(document.getElementById('keyOverlay'));
-        toast('키가 등록되었어요. '+((res&&res.note)?res.note:'이제 단원 설계를 시작할 수 있습니다.'));
-      })
-      .withFailureHandler(function(err){ setLoading(false); toast(err.message, true); })
-      .saveUserApiKey(v);
+    setLoading(true,'선택한 모델의 응답을 확인하는 중…');
+    google.script.run.withSuccessHandler(function(s){setLoading(false);updateAiStatus_(s);renderKeyBody_();toast('선택한 모델의 응답을 확인했습니다.');})
+      .withFailureHandler(function(e){setLoading(false);refreshAiStatus_();toast(e.message,true);})
+      .saveUserApiKey(document.getElementById('keyInput').value,document.getElementById('aiModel').value);
   }
   function doDelKey(){
-    if(!window.confirm('등록된 API 키를 삭제할까요? 다시 등록하기 전까지 AI 기능을 쓸 수 없어요.')) return;
-    setLoading(true,'키를 삭제하는 중…');
-    google.script.run.withSuccessHandler(function(){ setLoading(false); keyRegistered=false; renderKeyBody_(); toast('키를 삭제했어요.'); })
-      .withFailureHandler(function(err){ setLoading(false); toast(err.message, true); })
-      .clearUserApiKey();
+    if(!window.confirm('이 브라우저에 저장된 API 키를 삭제할까요? 단원 설계 내용은 유지됩니다.'))return;
+    google.script.run.withSuccessHandler(function(){refreshAiStatus_();keyRegistered=false;aiSettings_.hasKey=false;aiSettings_.status='missing';aiSettings_.message='';renderKeyBody_();toast('키를 삭제했습니다. AI 미연결 상태입니다.');}).withFailureHandler(function(e){toast(e.message,true);}).clearUserApiKey();
   }
   // ── 테마 ──
   var THEME_KEY='cbil_theme_v1';
@@ -3372,12 +3369,17 @@
   var restoring_=false, rawFields_={}, lastRetry_=null, saveTimer_=null, savedDrafts_=false;
   function enterWorkspace_(){ document.getElementById('welcome').hidden=true; document.getElementById('workspace').hidden=false; }
   function saveStatus_(ok){ var n=document.getElementById('saveStatus'); if(!n) return; n.textContent=ok?'✓ 초안 저장됨 · 이 브라우저':'저장하지 못했어요 · 단원 백업을 눌러 주세요'; n.classList.toggle('save-error',!ok); }
+  function rubricFocus_(){return designState.raftsRubricFocus||(designState.teachingContext||{}).rubricFocus||'writing';}
+  function syncRubricFocus_(){
+    document.getElementById('rubricFocus').value=rubricFocus_();
+    document.getElementById('rubricFocusHelp').textContent=rubricFocus_()==='inquiry'?'개념을 이해했는지, 자료를 근거로 설명하는지, 새로운 상황에도 배움을 적용하는지 살펴봅니다.':'글의 내용이 알맞은지, 흐름이 자연스러운지, 표현이 분명한지 살펴봅니다.';
+  }
   function syncContextFields_(){
     var c=designState.teachingContext||{};
     document.getElementById('totalLessons').value=c.totalLessons||'';
     document.getElementById('lessonMinutes').value=c.lessonMinutes||'';
     document.getElementById('classContext').value=c.classContext||'';
-    document.getElementById('rubricFocus').value=c.rubricFocus||'writing';
+    syncRubricFocus_();
   }
   function restoreDrafts_(d){
     savedDrafts_=!!d; if(!d) return;
@@ -3402,7 +3404,7 @@
   function startManualAssessment_(fw){
     clearRequestError_();
     if(fw==='rafts'){
-      var axes=(designState.teachingContext||{}).rubricFocus==='inquiry'?['개념 이해','근거 활용','전이']:['내용','조직','표현'];
+      var axes=rubricFocus_()==='inquiry'?['개념 이해','근거 활용','전이']:['내용','조직','표현'];
       raftsDraft={title:'',role:'',audience:'',format:'',topic:'',strongVerb:'',task:'',rubric:axes.map(function(a){return {criterion:a,A:'',B:'',C:''};})};
     }else graspsDraft={title:'',goal:'',role:'',audience:'',situation:'',product:'',standard:''};
     graspsMini=1; renderGrasps();
@@ -3463,14 +3465,15 @@
     document.getElementById('exampleBtn').onclick=function(){show(document.getElementById('exampleOverlay'));document.getElementById('exampleClose').focus();};
     document.getElementById('exampleClose').onclick=function(){hide(document.getElementById('exampleOverlay'));document.getElementById('exampleBtn').focus();};
     document.getElementById('exampleStart').onclick=function(){hide(document.getElementById('exampleOverlay'));document.getElementById('startBtn').click();};
+    document.getElementById('rubricFocus').addEventListener('change',function(){designState.raftsRubricFocus=this.value;syncRubricFocus_();saveLocal_();});
     document.getElementById('standardSearch').addEventListener('input',renderList);
     document.getElementById('selectedOnly').addEventListener('change',renderList);
     document.getElementById('backupBtn').onclick=backupUnit_;
     document.getElementById('importBtn').onclick=function(){document.getElementById('importFile').click();};
     document.getElementById('importFile').onchange=function(e){importUnit_(e.target.files[0]);e.target.value='';};
-    ['totalLessons','lessonMinutes','classContext','rubricFocus'].forEach(function(id){document.getElementById(id).addEventListener('change',function(){
+    ['totalLessons','lessonMinutes','classContext'].forEach(function(id){document.getElementById(id).addEventListener('change',function(){
       var n=document.getElementById(id);if(!n.checkValidity()){n.reportValidity();return;}
-      designState.teachingContext={totalLessons:Number(document.getElementById('totalLessons').value)||null,lessonMinutes:Number(document.getElementById('lessonMinutes').value)||null,classContext:document.getElementById('classContext').value.trim(),rubricFocus:document.getElementById('rubricFocus').value};queueSave_();
+      designState.teachingContext={totalLessons:Number(document.getElementById('totalLessons').value)||null,lessonMinutes:Number(document.getElementById('lessonMinutes').value)||null,classContext:document.getElementById('classContext').value.trim(),rubricFocus:(designState.teachingContext||{}).rubricFocus||'writing'};queueSave_();
     });});
     document.getElementById('main').addEventListener('input',function(e){var n=e.target;
       if(n.matches('input[type="text"],textarea')&&!['classContext'].includes(n.id))rawFields_[rawKey_(n)]=n.value;
@@ -3494,3 +3497,4 @@
 
   window.__designState=function(){ return designState; };
 })();
+

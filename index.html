@@ -20,7 +20,7 @@
       <div class="kicker">YOUNGSSAM CLASS · LESSON STUDIO</div>
       <h1 class="brand"><span class="brand-symbol" aria-hidden="true">✳</span> 단원 설계 <span class="pin">도우미</span></h1>
       <div class="hd-actions">
-        <button type="button" class="btn btn-ghost" id="keyBtn">AI 연결</button>
+        <button type="button" class="btn btn-ghost" id="keyBtn">AI 미연결 · 설정</button>
         <button type="button" class="btn btn-ghost" id="themeBtn">화면 테마</button>
         <button type="button" class="btn btn-ghost" id="archiveBtn">내 단원</button>
       </div>
@@ -52,7 +52,7 @@
     <div class="arc-overlay" id="keyOverlay" style="display:none">
       <div class="arc-modal thm-modal">
         <div class="arc-head">
-          <h3>Gemini API 키</h3>
+          <h3>AI 연결 및 모델 설정</h3>
           <div class="arc-actions"><button type="button" class="btn btn-ghost" id="keyClose">닫기</button></div>
         </div>
         <div class="arc-body" id="keyBody"></div>
@@ -98,7 +98,7 @@
               <select id="areaSelect"><option value="">전체 영역</option></select></div>
           </div>
           <div id="tonghapInfo" style="display:none"></div>
-          <details class="teaching-settings" open><summary>우리 반 수업 여건 <span>선택 입력</span></summary><div class="context-grid"><label>총 차시<input id="totalLessons" type="number" min="1" max="200" placeholder="예: 12"></label><label>한 차시 시간(분)<input id="lessonMinutes" type="number" min="10" max="180" placeholder="예: 40"></label><label class="context-wide">학급 여건·활용할 자원<textarea id="classContext" rows="2" maxlength="1500" placeholder="예: 24명, 모둠당 태블릿 1대, 지역 탐방 가능"></textarea></label><label class="context-wide">RAFTS 루브릭의 평가 관점<select id="rubricFocus"><option value="writing">내용 · 조직 · 표현</option><option value="inquiry">개념 이해 · 근거 활용 · 전이</option></select></label></div></details>
+          <details class="teaching-settings" open><summary>우리 반 수업 여건 <span>선택 입력</span></summary><div class="context-grid"><label>총 차시<input id="totalLessons" type="number" min="1" max="200" placeholder="예: 12"></label><label>한 차시 시간(분)<input id="lessonMinutes" type="number" min="10" max="180" placeholder="예: 40"></label><label class="context-wide">학급 여건·활용할 자원<textarea id="classContext" rows="2" maxlength="1500" placeholder="예: 24명, 모둠당 태블릿 1대, 지역 탐방 가능"></textarea></label></div></details>
           <div id="stdListWrap" style="display:none"><div class="search-row"><label for="standardSearch">성취기준 찾기</label><input type="search" id="standardSearch" placeholder="코드 또는 키워드 검색 · 예: 변화, 4사03"><label class="selected-filter"><input type="checkbox" id="selectedOnly">선택한 기준만</label></div>
             <div class="list-head"><span class="lbl">성취기준</span><span class="cnt" id="selCount">0개 선택됨</span></div>
             <div class="list" id="stdList"></div>
@@ -146,6 +146,13 @@
         <!-- STEP 4 : 수행평가 (GRASPS 미니스텝 흐름) -->
         <section class="card panel" id="panel-grasps" style="display:none">
           <div class="concept-sub" id="graspsProgress"></div>
+          <div id="raftsFocusSettings" class="teaching-settings" hidden>
+            <label for="rubricFocus"><b>학생의 결과물에서 무엇을 더 살펴볼까요?</b></label>
+            <p class="key-note">평가 기준표(루브릭)에 담을 관점입니다. 처음에는 기본값으로 진행하셔도 됩니다.</p>
+            <select id="rubricFocus"><option value="writing">글과 표현 살펴보기 (기본) — 내용 · 조직 · 표현</option><option value="inquiry">탐구와 이해 살펴보기 — 개념 이해 · 근거 활용 · 전이</option></select>
+            <p class="key-note" id="rubricFocusHelp">글의 내용이 알맞은지, 흐름이 자연스러운지, 표현이 분명한지 살펴봅니다.</p>
+            <p class="key-note">변경한 관점은 다음 AI 재제안이나 새 직접 작성 과제부터 반영됩니다. 이미 작성한 평가 기준은 그대로 유지됩니다.</p>
+          </div>
           <div id="graspsBody"></div>
           <div class="actions">
             <button class="btn btn-ghost" id="graspsPrev">← 이전</button>
@@ -202,7 +209,7 @@
         <div class="summary-body" id="summaryBody"></div>
       </aside>
     </div>
-    </div><footer class="studio-footer">ⓒ 영쌤클래스 · 개념 기반 탐구 단원 설계 도우미 <span>v3.1</span></footer>
+    </div><footer class="studio-footer">ⓒ 영쌤클래스 · 개념 기반 탐구 단원 설계 도우미 <span>v3.2</span></footer>
   </div>
 
   <div class="overlay" id="overlay"><div class="spinner"></div><div id="overlayMsg">불러오는 중…</div></div>
@@ -223,3 +230,4 @@
 <script src="designer.js?v=3.1"></script>
 </body>
 </html>
+

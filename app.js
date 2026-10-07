@@ -15,7 +15,31 @@
 
 /* ══════════ 0. 설정 ══════════ */
 var GEMINI_MODEL          = 'gemini-3.5-flash';
-var GEMINI_FALLBACK_MODEL = 'gemini-3.1-flash-lite';
+var MODEL_STORE = 'cbil_gemini_model_v1';
+var AI_MODELS = [
+  {id:'gemini-3.5-flash', label:'Gemini 3.5 Flash · 기존 기본 모델'},
+  {id:'gemini-3.8-flash', label:'Gemini 3.8 Flash · 최신 Flash'},
+  {id:'gemini-3.5-flash-lite', label:'Gemini 3.5 Flash-Lite · 속도·비용 중심'},
+  {id:'gemini-3.1-flash-lite', label:'Gemini 3.1 Flash-Lite'},
+  {id:'gemini-3.1-pro-preview', label:'Gemini 3.1 Pro · 미리보기'}
+];
+var aiSessionState='unchecked', aiSessionMessage='', aiSessionKey=null, aiSessionModel=null;
+function selectedModel_(){
+  var m; try{m=window.localStorage.getItem(MODEL_STORE);}catch(e){}
+  return AI_MODELS.some(function(x){return x.id===m;})?m:GEMINI_MODEL;
+}
+function getAiSettings(){
+  var currentKey=null;try{currentKey=window.localStorage.getItem(KEY_STORE);}catch(e){}
+  if(currentKey!==aiSessionKey || selectedModel_()!==aiSessionModel){aiSessionState='unchecked';aiSessionMessage='';}
+  return {hasKey:hasUserApiKey(), model:selectedModel_(), models:AI_MODELS,
+  status:hasUserApiKey()?aiSessionState:'missing', message:hasUserApiKey()?aiSessionMessage:''};}
+function aiState_(status,message){aiSessionState=status;aiSessionMessage=message||'';
+  try{aiSessionKey=window.localStorage.getItem(KEY_STORE);}catch(e){aiSessionKey=null;}aiSessionModel=selectedModel_();
+  window.dispatchEvent(new CustomEvent('cbil-ai-state',{detail:getAiSettings()}));}
+function saveAiModel(model){
+  if(!AI_MODELS.some(function(x){return x.id===model;})) throw new Error('목록에서 모델을 선택해 주세요.');
+  window.localStorage.setItem(MODEL_STORE,model);aiState_('unchecked');return getAiSettings();
+}
 var GEMINI_TEMPERATURE = 0.7;
 var GEMINI_MAX_TOKENS  = 8192;
 var GEMINI_API_VERSION = 'v1beta';
@@ -202,23 +226,21 @@ function hasUserApiKey(){
   try { return !!window.localStorage.getItem(KEY_STORE); } catch (e) { return false; }
 }
 
-function saveUserApiKey(key){
-  key = String(key || '').trim();
-  if (!key) return Promise.reject(new Error('API 키를 붙여넣어 주세요.'));
-  if (key.length < 20) return Promise.reject(new Error('키가 너무 짧아요. AI Studio에서 복사한 키 전체를 붙여넣어 주세요.'));
-  return testKey_(key).then(function(status){
-    if (status === 'invalid') {
-      throw new Error('키가 유효하지 않아요. Google AI Studio(aistudio.google.com/app/apikey)에서 키를 다시 복사해 주세요.');
-    }
-    try { window.localStorage.setItem(KEY_STORE, key); }
-    catch (e) { throw new Error('브라우저 저장소에 키를 저장하지 못했습니다. 시크릿 창이 아닌 일반 창에서 시도해 주세요.'); }
-    return { ok: true, note: status === 'quota' ? '다만 지금은 호출 한도 상태라 잠시 후부터 사용할 수 있어요.' : '' };
-  });
+function saveUserApiKey(key,model){
+  key=String(key||'').trim();
+  if(!key){try{key=window.localStorage.getItem(KEY_STORE)||'';}catch(e){}}
+  if(!key) return Promise.reject(new Error('API 키를 붙여넣어 주세요. 모델만 선택해도 AI에 연결되지는 않습니다.'));
+  if(key.length<20) return Promise.reject(new Error('키가 너무 짧아요. 복사한 키 전체를 붙여넣어 주세요.'));
+  try{saveAiModel(model||selectedModel_());}catch(e){return Promise.reject(e);}
+  var checkedModel=selectedModel_();aiState_('checking');
+  return testKey_(key,checkedModel).then(function(){
+    try{window.localStorage.setItem(KEY_STORE,key);}catch(e){throw new Error('API 키를 브라우저에 저장하지 못했습니다.');}
+    aiState_('verified','선택한 모델의 응답을 확인했습니다.');return getAiSettings();
+  }).catch(function(e){aiState_('error',msgOf_(e));throw e;});
 }
-
 function clearUserApiKey(){
-  try { window.localStorage.removeItem(KEY_STORE); } catch (e) {}
-  return Promise.resolve({ ok: true });
+  try{window.localStorage.removeItem(KEY_STORE);}catch(e){return Promise.reject(new Error('키를 삭제하지 못했습니다.'));}
+  aiState_('missing');return Promise.resolve({ok:true});
 }
 
 /** v3.0: 계정 개념이 없다 — 키 저장 위치를 알려 준다(🔑 창 표시용) */
@@ -228,17 +250,21 @@ function whoAmI(){
 
 function sleep_(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
 
-function testKey_(key){
-  var url = 'https://generativelanguage.googleapis.com/' + GEMINI_API_VERSION +
-            '/models/' + GEMINI_FALLBACK_MODEL + ':generateContent?key=' + encodeURIComponent(key);
-  var payload = { contents: [{ parts: [{ text: 'ping' }] }], generationConfig: { maxOutputTokens: 1 } };
-  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-    .then(function(res){
-      if (res.status === 200) return 'ok';
-      if (res.status === 429 || res.status === 503) return 'quota';
-      if(res.status===400||res.status===401||res.status===403) return 'invalid';
-      throw new Error('AI 연결 확인 중 오류가 발생했습니다(HTTP '+res.status+'). 잠시 후 다시 시도해 주세요.');
-    }, function(){ throw new Error('네트워크 연결을 확인한 뒤 다시 시도해 주세요.'); });
+function testKey_(key,model){
+  var url='https://generativelanguage.googleapis.com/'+GEMINI_API_VERSION+'/models/'+model+':generateContent?key='+encodeURIComponent(key);
+  return fetchGemini_(url,{contents:[{parts:[{text:'Return exactly {"ok":true} as JSON.'}]}],generationConfig:{responseMimeType:'application/json',maxOutputTokens:256}}).then(function(r){
+    if(r.code!==200) throw new Error(aiHttpMessage_(r.code));
+    var data=JSON.parse(r.body);if(!extractText_(data))throw new Error('연결 요청은 전달됐지만 모델 응답을 확인하지 못했습니다. 다시 확인해 주세요.');
+    return true;
+  });
+}
+function aiHttpMessage_(code){
+  if(code===400||code===401)return '키 또는 요청을 확인할 수 없습니다. API 키와 선택한 모델을 확인해 주세요.';
+  if(code===403)return '이 키에 선택한 모델을 사용할 권한이 없습니다. Google AI Studio의 프로젝트 설정을 확인해 주세요.';
+  if(code===404)return '선택한 모델을 찾을 수 없거나 이 프로젝트에서 사용할 수 없습니다. 다른 모델을 선택해 주세요.';
+  if(code===429)return '선택한 모델의 호출 한도를 초과했습니다. 잠시 뒤 다시 확인하거나 Google AI Studio에서 한도를 확인해 주세요.';
+  if(code===503)return 'Google AI 서버가 일시적으로 혼잡합니다. 잠시 뒤 다시 확인해 주세요.';
+  return 'AI 요청에 실패했습니다(HTTP '+code+'). 잠시 뒤 다시 시도해 주세요.';
 }
 
 function msgOf_(e){ return (e && e.message) ? e.message : String(e || ''); }
@@ -256,22 +282,12 @@ function callGemini(prompt, schema){
 
 function isParseError_(e){ return msgOf_(e).indexOf('JSON 파싱 실패') === 0; }
 
-function callGeminiLadder_(prompt, schema){
-  return callGeminiModel_(GEMINI_MODEL, prompt, schema)['catch'](function(e){
-    if (!isQuotaError_(e) && !isOverloadError_(e)) throw e;
-    return callGeminiModel_(GEMINI_FALLBACK_MODEL, prompt, schema)['catch'](function(e2){
-      if (isQuotaError_(e2)) {
-        var both = msgOf_(e) + ' ' + msgOf_(e2);
-        if (both.indexOf('QUOTA_MINUTE') !== -1) {
-          throw new Error('요청이 잠깐 몰렸어요(분당 호출 한도). 1분쯤 뒤에 같은 버튼을 다시 눌러 주세요 — 진행 내용은 자동 저장되어 있습니다.');
-        }
-        throw new Error('오늘 치 무료 호출 한도를 모두 사용했어요. 한도와 초기화 시각은 Google AI Studio에서 확인해 주세요. 진행 내용은 자동 저장되어 있으니 그때 이어서 하면 됩니다.');
-      }
-      if (isOverloadError_(e2)) {
-        throw new Error('Gemini 서버가 일시적으로 혼잡해요. 잠시 뒤 같은 버튼을 다시 눌러 주세요 — 진행 내용은 자동 저장되어 있습니다.');
-      }
-      throw e2;
-    });
+function callGeminiLadder_(prompt,schema){
+  // 사용자가 선택한 모델을 유지합니다. 다른 모델로 자동 전환하지 않습니다.
+  return callGeminiModel_(selectedModel_(),prompt,schema).catch(function(e){
+    if(isQuotaError_(e))throw new Error(aiHttpMessage_(429));
+    if(isOverloadError_(e))throw new Error(aiHttpMessage_(503));
+    throw e;
   });
 }
 
@@ -302,7 +318,7 @@ function callGeminiModel_(model, prompt, schema){
   }).then(function(r){
     if (r.code === 429) throw new Error((isDailyQuotaBody_(r.body) ? 'QUOTA_DAILY' : 'QUOTA_MINUTE') + ' (' + model + ')');
     if (r.code === 503) throw new Error('OVERLOADED (' + model + ')');
-    if (r.code !== 200) throw new Error('Gemini API 오류 (HTTP ' + r.code + '): ' + String(r.body || '').substring(0, 800));
+    if (r.code !== 200) throw new Error(aiHttpMessage_(r.code));
     var data = JSON.parse(r.body);
     var text = extractText_(data);
     if (!text) {
@@ -311,6 +327,7 @@ function callGeminiModel_(model, prompt, schema){
       else if (data.promptFeedback && data.promptFeedback.blockReason) reason = ' (blockReason: ' + data.promptFeedback.blockReason + ')';
       throw new Error('Gemini 응답에 텍스트가 없습니다' + reason + '. 원문: ' + String(r.body || '').substring(0, 500));
     }
+    if(model===selectedModel_() && hasUserApiKey() && apiKey===getApiKeyOrThrow_())aiState_('verified','최근 AI 응답을 확인했습니다.');
     try { return safeParseJson_(text); }
     catch (pe) {
       var repaired = repairJson_(text);
@@ -319,6 +336,9 @@ function callGeminiModel_(model, prompt, schema){
       if (fr && fr !== 'STOP') throw new Error(msgOf_(pe) + '\n(응답 중단 사유: ' + fr + ')');
       throw pe;
     }
+  }).catch(function(e){
+    if(model===selectedModel_() && hasUserApiKey() && apiKey===getApiKeyOrThrow_())aiState_('error',isQuotaError_(e)?aiHttpMessage_(429):isOverloadError_(e)?aiHttpMessage_(503):msgOf_(e));
+    throw e;
   });
 }
 
@@ -1515,7 +1535,7 @@ var __API = {
   getStrategyBank: function(){ return preloadBank_(); }, getTonghapData: getTonghapData,
   getOfficialCoreIdeas: getOfficialCoreIdeas,
   hasUserApiKey: function(){ return Promise.resolve(hasUserApiKey()); },
-  saveUserApiKey: saveUserApiKey, clearUserApiKey: clearUserApiKey, whoAmI: whoAmI,
+  getAiSettings:getAiSettings, saveAiModel:saveAiModel, saveUserApiKey: saveUserApiKey, clearUserApiKey: clearUserApiKey, whoAmI: whoAmI,
   generateLenses: generateLenses, generateTitles: generateTitles, generateCoreIdeas: generateCoreIdeas,
   generateStrands: generateStrands, generateStrandConcepts: generateStrandConcepts,
   generatePreconceptions: generatePreconceptions, generateGeneralizations: generateGeneralizations,
